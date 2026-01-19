@@ -1,0 +1,29 @@
+{
+  "id": "anomaly-ranker",
+  "name": "Anomaly Ranker",
+  "version": "0.1.0",
+  "description": "Calculate anomaly ranks using statistical outlier detection and SimHash similarity.",
+  "author": {
+    "name": "insomnia1102",
+    "email": "marucube35@gmail.com",
+    "url": "https://github.com/aleister1102/anomaly-ranker-caido"
+  },
+  "plugins": [
+    {
+      "kind": "frontend",
+      "id": "anomaly-ranker-frontend",
+      "name": "Anomaly Ranker Frontend",
+      "entrypoint": "dist/frontend/index.js",
+      "backend": {
+        "id": "anomaly-ranker-backend"
+      }
+    },
+    {
+      "kind": "backend",
+      "id": "anomaly-ranker-backend",
+      "name": "Anomaly Ranker Backend",
+      "runtime": "javascript",
+      "entrypoint": "dist/backend/index.js"
+    }
+  ]
+}

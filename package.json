@@ -1,0 +1,31 @@
+{
+  "name": "anomaly-ranker",
+  "version": "0.1.0",
+  "description": "Calculate anomaly ranks using statistical outlier detection and SimHash similarity.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "caido-dev",
+    "watch": "caido-dev watch",
+    "build": "caido-dev build",
+    "package": "caido-dev build",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "caido",
+    "plugin",
+    "anomaly",
+    "security"
+  ],
+  "author": "aleister1102",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@caido/sdk-backend": "^0.54.1",
+    "@caido/sdk-frontend": "^0.54.1"
+  },
+  "devDependencies": {
+    "@caido-community/dev": "^0.1.6",
+    "@types/node": "^25.0.5",
+    "typescript": "^5.9.3"
+  }
+}
