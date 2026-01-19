@@ -1,6 +1,6 @@
 # Anomaly Ranker for Caido
 
-![1768154121596](image/README/1768154121596.png)Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. it helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
+![Anomaly Ranker Dashboard](image/README/dashboard.png) Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. it helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
 
 The plugin identifies outliers in your traffic using statistical analysis and structural similarity (SimHash), highlighting requests that deviate from the "normal" baseline of your selection.
 
@@ -12,7 +12,7 @@ The plugin identifies outliers in your traffic using statistical analysis and st
   - **SimHash Similarity**: Computes 64-bit structural fingerprints of response bodies to find unique page layouts.
 - **High Performance**:
   - **Optimized SimHash**: Uses a popcount lookup table for fast bitwise comparisons.
-  - **Memory Efficient**: Uses typed arrays and character-scanning tokenization.![1768154639477](image/README/1768154639477.png)
+  - **Memory Efficient**: Uses typed arrays and character-scanning tokenization. ![Anomaly Ranker Features](image/README/features.png)
   - **Scalable**: Automatically truncates large response bodies (50KB limit) for ranking to ensure smooth UI performance with large datasets.
 - **Unified Dashboard**:
   - **Sortable Table**: View results ranked from 0 to 100.
