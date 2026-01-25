@@ -24,7 +24,11 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
 
   container.addEventListener("keydown", (e) => {
     if (e.key === "Shift" || e.key === "CapsLock" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") {
-      (document.activeElement as HTMLElement)?.blur();
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === "INPUT" || activeElement.tagName === "SELECT" || activeElement.tagName === "TEXTAREA")) {
+        return;
+      }
+      (activeElement as HTMLElement)?.blur();
     }
   });
 
@@ -180,6 +184,14 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       font-size: 14px;
       cursor: pointer;
       transition: border-color 0.2s, box-shadow 0.2s;
+      color-scheme: dark light;
+    }
+    .caido-select option {
+      background: var(--background);
+      color: var(--color-foreground);
+    }
+    .caido-select option:disabled {
+      color: var(--color-foreground-secondary, #888);
     }
     .caido-select:hover {
       border-color: var(--color-primary, #3b82f6);
@@ -196,6 +208,7 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       padding: 6px 12px;
       font-size: 14px;
       transition: border-color 0.2s, box-shadow 0.2s;
+      color-scheme: dark light;
     }
     .caido-input:hover {
       border-color: var(--border-color-hover, #555);
