@@ -21,12 +21,14 @@ The plugin identifies outliers in your traffic using statistical analysis and st
   - **Crayon-Compatible Coloring**: Rows are color-coded based on status codes and content-types (matches Crayon plugin rules).
   - **Multi-Select Support**: Use Shift+Click or Ctrl/Cmd+Click to manage subsets of results.
   - **Power Filtering**: Search by URL, Method, Status, or Content-Type.
-- **Integrated Request Viewer**: Side-by-side Request and Response viewer for rapid analysis.
-- **Bulk Actions**:
-  - **Send to Replay**: Create Replay sessions for selected or all results.
-  - **Copy URLs/Curls**: Quickly grab data for external tools.
-  - **Export to CSV**: Download results as a CSV file for external analysis.
-  - **FFUF Snippet**: Generate a command template for fuzzing.
+- **Integrated Request Viewer**: Side-by-side Request and Response viewer for rapid analysis. Now vertically resizable to adjust layout.
+- **Improved Bulk Actions**:
+  - **Selection Controls**: Dedicated dropdown for Select All and Deselect All.
+  - **Export Actions**: Dedicated dropdown for data export.
+    - **Send to Replay**: Create Replay sessions for selected or all results.
+    - **Copy URLs/Curls**: Quickly grab data for external tools.
+    - **Export to CSV**: Download results as a CSV file for external analysis.
+    - **FFUF Snippet**: Generate a command template for fuzzing.
 
 ## Anomaly Ranking Algorithm
 

@@ -150,11 +150,28 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     }
     .anomaly-viewer-container {
       height: 400px;
+      min-height: 200px;
       border: 1px solid var(--border-color);
       border-radius: 4px;
       display: none;
       flex-direction: column;
       box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+      position: relative;
+    }
+    .anomaly-viewer-resizer {
+      height: 8px;
+      margin-top: -4px;
+      cursor: row-resize;
+      z-index: 1001;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      transition: background-color 0.2s;
+    }
+    .anomaly-viewer-resizer:hover {
+      background-color: var(--color-primary, #3b82f6);
+      opacity: 0.5;
     }
     .anomaly-viewer-header {
       padding: 10px;
@@ -174,31 +191,6 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       flex: 1;
       min-width: 0;
       overflow: hidden;
-    }
-    .caido-select {
-      background: var(--background);
-      color: var(--color-foreground);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      padding: 6px 12px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: border-color 0.2s, box-shadow 0.2s;
-      color-scheme: dark light;
-    }
-    .caido-select option {
-      background: var(--background);
-      color: var(--color-foreground);
-    }
-    .caido-select option:disabled {
-      color: var(--color-foreground-secondary, #888);
-    }
-    .caido-select:hover {
-      border-color: var(--color-primary, #3b82f6);
-    }
-    .caido-select:focus {
-      border-color: var(--color-primary, #3b82f6);
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
     }
     .caido-input {
       background: var(--background);
@@ -258,6 +250,76 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       cursor: pointer;
       font-size: 14px;
       white-space: nowrap;
+    }
+    .custom-dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .custom-dropdown-trigger {
+      background: var(--background);
+      color: var(--color-foreground);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 6px 32px 6px 12px;
+      cursor: pointer;
+      min-width: 120px;
+      font-size: 14px;
+      position: relative;
+      transition: border-color 0.2s;
+    }
+    .custom-dropdown-trigger:hover {
+      border-color: var(--color-primary, #3b82f6);
+    }
+    .custom-dropdown-trigger::after {
+      content: "\f0d7";
+      font-family: "Font Awesome 5 Free";
+      font-weight: 900;
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+    .custom-dropdown-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      background: #1e1e1e;
+      color: #e0e0e0;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 1000;
+      display: none;
+      min-width: 100%;
+      margin-top: 4px;
+    }
+    .custom-dropdown-menu.open {
+      display: block;
+    }
+    .custom-dropdown-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 14px;
+      color: #e0e0e0;
+      transition: background-color 0.1s, color 0.1s;
+    }
+    .custom-dropdown-item:hover {
+      background: #2a2a2a;
+      color: #ffffff;
+    }
+    .custom-dropdown-item.disabled {
+      color: #666666;
+      cursor: default;
+    }
+    .custom-dropdown-item.disabled:hover {
+      background: transparent;
+      color: #666666;
+    }
+    .custom-dropdown-divider {
+      border-top: 1px solid #3a3a3a;
+      margin: 4px 0;
     }
   `;
   container.appendChild(style);
@@ -392,31 +454,73 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
   const actionsControls = document.createElement("div");
   actionsControls.className = "anomaly-toolbar-controls";
 
-  const bulkMenu = document.createElement("select");
-  bulkMenu.className = "caido-select";
-  
-  const options = [
-    { label: "Actions", value: "", disabled: true },
-    { label: "── Selection ──", value: "", disabled: true },
+  const createCustomDropdown = (label: string, options: { label: string, value: string, disabled?: boolean, divider?: boolean }[]) => {
+    const dropdown = document.createElement("div");
+    dropdown.className = "custom-dropdown";
+    
+    const trigger = document.createElement("div");
+    trigger.className = "custom-dropdown-trigger";
+    trigger.textContent = label;
+    dropdown.appendChild(trigger);
+
+    const menu = document.createElement("div");
+    menu.className = "custom-dropdown-menu";
+    dropdown.appendChild(menu);
+
+    options.forEach(opt => {
+      if (opt.divider) {
+        const divider = document.createElement("div");
+        divider.className = "custom-dropdown-divider";
+        menu.appendChild(divider);
+        return;
+      }
+
+      const item = document.createElement("div");
+      item.className = "custom-dropdown-item";
+      if (opt.disabled) item.classList.add("disabled");
+      item.textContent = opt.label;
+      
+      if (!opt.disabled) {
+        item.addEventListener("click", () => {
+          handleBulkAction(opt.value);
+          menu.classList.remove("open");
+        });
+      }
+      
+      menu.appendChild(item);
+    });
+
+    trigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Close all other dropdowns
+      document.querySelectorAll(".custom-dropdown-menu").forEach(m => {
+        if (m !== menu) m.classList.remove("open");
+      });
+      menu.classList.toggle("open");
+    });
+
+    return dropdown;
+  };
+
+  const selectionDropdown = createCustomDropdown("Selection", [
     { label: "Select All", value: "select-all" },
     { label: "Deselect All", value: "deselect-all" },
-    { label: "── Export ──", value: "", disabled: true },
+  ]);
+
+  const exportDropdown = createCustomDropdown("Export", [
     { label: "Send to Replay", value: "repeater" },
     { label: "Copy URLs", value: "copy-urls" },
     { label: "Copy as cURL", value: "copy-curls" },
     { label: "Export CSV", value: "csv" },
     { label: "FFUF Snippet", value: "ffuf" },
-  ];
-  
-  options.forEach(opt => {
-    const o = document.createElement("option");
-    o.value = opt.value;
-    o.textContent = opt.label;
-    if (opt.disabled) o.disabled = true;
-    bulkMenu.appendChild(o);
+  ]);
+
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".custom-dropdown-menu").forEach(m => m.classList.remove("open"));
   });
 
-  actionsControls.appendChild(bulkMenu);
+  actionsControls.appendChild(selectionDropdown);
+  actionsControls.appendChild(exportDropdown);
   actionsGroup.appendChild(actionsControls);
 
   toolbar.appendChild(scanGroup);
@@ -508,23 +612,16 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     }, 300);
   });
 
-  scanAllCheckbox.addEventListener("change", () => {
-    scanAll = scanAllCheckbox.checked;
-  });
-
-  bulkMenu.addEventListener("change", async () => {
-    const val = bulkMenu.value;
+  const handleBulkAction = async (val: string) => {
     if (!val) return;
 
     const selectedIds = table.getSelectedIds();
 
     if (val === "select-all") {
       table.selectAll();
-      bulkMenu.selectedIndex = 0;
       return;
     } else if (val === "deselect-all") {
       table.deselectAll();
-      bulkMenu.selectedIndex = 0;
       return;
     }
     
@@ -534,7 +631,6 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
 
     if (targets.length === 0) {
       caido.window.showToast("No results to process", { variant: "info", duration: 2000 });
-      bulkMenu.selectedIndex = 0;
       return;
     }
 
@@ -582,7 +678,10 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     } else if (val === "ffuf") {
       alert(toFfuf(targets));
     }
-    bulkMenu.selectedIndex = 0;
+  };
+
+  scanAllCheckbox.addEventListener("change", () => {
+    scanAll = scanAllCheckbox.checked;
   });
 
   // --- Results Filter ---

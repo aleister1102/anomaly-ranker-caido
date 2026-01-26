@@ -1,6 +1,6 @@
 {
   "name": "anomaly-ranker",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Calculate anomaly ranks using statistical outlier detection and SimHash similarity.",
   "main": "index.js",
   "scripts": {
