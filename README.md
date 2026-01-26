@@ -8,27 +8,12 @@ The plugin identifies outliers in your traffic using statistical analysis and st
 
 ## Features
 
-- **Context Menu Integration**: Right-click any selection of requests in HTTP History or Search and select **Apply Anomaly Rank**.
-- **Advanced Ranking Engine**:
-  - **Statistical Analysis**: Detects outliers based on response length, status codes, and content-types.
-  - **SimHash Similarity**: Computes 64-bit structural fingerprints of response bodies to find unique page layouts.
-- **High Performance**:
-  - **Optimized SimHash**: Uses a popcount lookup table for fast bitwise comparisons.
-  - **Memory Efficient**: Uses typed arrays and character-scanning tokenization.
-  - **Scalable**: Automatically truncates large response bodies (50KB limit) for ranking to ensure smooth UI performance with large datasets.
-- **Unified Dashboard**:
-  - **Sortable Table**: View results ranked from 0 to 100.
-  - **Crayon-Compatible Coloring**: Rows are color-coded based on status codes and content-types (matches Crayon plugin rules).
-  - **Multi-Select Support**: Use Shift+Click or Ctrl/Cmd+Click to manage subsets of results.
-  - **Power Filtering**: Search by URL, Method, Status, or Content-Type.
-- **Integrated Request Viewer**: Side-by-side Request and Response viewer for rapid analysis. Now vertically resizable to adjust layout.
-- **Improved Bulk Actions**:
-  - **Selection Controls**: Dedicated dropdown for Select All and Deselect All.
-  - **Export Actions**: Dedicated dropdown for data export.
-    - **Send to Replay**: Create Replay sessions for selected or all results.
-    - **Copy URLs/Curls**: Quickly grab data for external tools.
-    - **Export to CSV**: Download results as a CSV file for external analysis.
-    - **FFUF Snippet**: Generate a command template for fuzzing.
+- **Context Menu Integration**: Right-click requests and select **Apply Anomaly Rank**.
+- **Advanced Ranking**: Statistical analysis and SimHash structural similarity to find outliers.
+- **High Performance**: Optimized SimHash engine with body truncation for speed.
+- **Unified Dashboard**: Sortable table with Crayon-compatible coloring and advanced filtering.
+- **Integrated Viewer**: Side-by-side Request/Response viewer with vertical resizing.
+- **Bulk Actions**: Separate Selection and Export menus for rapid data processing.
 
 ## Anomaly Ranking Algorithm
 
