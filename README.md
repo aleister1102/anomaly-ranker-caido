@@ -1,19 +1,23 @@
 # Anomaly Ranker for Caido
 
-# Anomaly Ranker for Caido
-
 Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. it helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
 
 The plugin identifies outliers in your traffic using statistical analysis and structural similarity (SimHash), highlighting requests that deviate from the "normal" baseline of your selection.
 
 ## Features
 
-- **Context Menu Integration**: Right-click requests and select **Apply Anomaly Rank**.
-- **Advanced Ranking**: Statistical analysis and SimHash structural similarity to find outliers.
-- **High Performance**: Optimized SimHash engine with body truncation for speed.
-- **Unified Dashboard**: Sortable table with Crayon-compatible coloring and advanced filtering.
-- **Integrated Viewer**: Side-by-side Request/Response viewer with vertical resizing.
-- **Bulk Actions**: Separate Selection and Export menus for rapid data processing.
+- **Rank by selection**: Context menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
+- **Accurate scoring**: Statistical outliers + SimHash similarity.
+- **Fast at scale**: Optimized hashing and truncation.
+- **Productive UI**: Filterable table, viewer, and bulk actions.
+
+## Screenshots
+
+![1769499802835](image/README/dashboard.png)
+
+![1769499830103](image/README/commands.png)
+
+![1769499906589](image/README/autocompletion.png)
 
 ## Anomaly Ranking Algorithm
 
@@ -52,9 +56,9 @@ The plugin uses standard security research color conventions:
 
 1.  Navigate to **HTTP History** or **Search**.
 2.  Select one or more requests you wish to analyze.
-3.  Right-click and select **Apply Anomaly Rank**.
-4.  The **Anomaly Rank** sidebar will open automatically.
-5.  Use the **Actions** dropdown to process your findings.
+3.  Run **Anomaly Ranker: Rank Selection** via right-click menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
+4.  The **Anomaly Rank** sidebar opens automatically.
+5.  Use the **Selection** and **Export** dropdowns to process your findings.
 
 ## Development
 

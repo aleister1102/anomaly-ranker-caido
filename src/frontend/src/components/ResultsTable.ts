@@ -101,19 +101,19 @@ export class ResultsTable {
     }
 
     const field = this.sortField;
+    const dir = this.sortDirection === "asc" ? 1 : -1;
+    
     this.results.sort((a, b) => {
       const v1 = a[field];
       const v2 = b[field];
       if (v1 === undefined || v2 === undefined) return 0;
       
       if (typeof v1 === "string" && typeof v2 === "string") {
-        return this.sortDirection === "asc" 
-          ? v1.localeCompare(v2)
-          : v2.localeCompare(v1);
+        return dir * v1.localeCompare(v2);
       }
 
-      if (v1 < v2) return this.sortDirection === "asc" ? -1 : 1;
-      if (v1 > v2) return this.sortDirection === "asc" ? 1 : -1;
+      if (v1 < v2) return -dir;
+      if (v1 > v2) return dir;
       return 0;
     });
   }
@@ -265,17 +265,12 @@ export class ResultsTable {
     const viewportHeight = this.scrollContainer.clientHeight;
     
     const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER_ROWS);
-    const end = Math.min(
-      this.results.length,
-      Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + BUFFER_ROWS
-    );
+    const end = Math.min(this.results.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + BUFFER_ROWS);
 
     if (start === this.visibleStart && end === this.visibleEnd) {
       this.tbody.querySelectorAll(".caido-table-row").forEach(row => {
         const id = row.getAttribute("data-id");
-        if (id) {
-          row.classList.toggle("selected", this.selectedIds.has(id));
-        }
+        if (id) row.classList.toggle("selected", this.selectedIds.has(id));
       });
       return;
     }

@@ -3,29 +3,11 @@
 import type { APISDK, SDK } from "caido:plugin";
 import { RankingEngine } from "./ranker.js";
 import { HistoryScanner } from "./scanner.js";
+import { ResultsCache } from "./cache.js";
 import { BackendEndpoints, RankedResult, ScanHistoryOptions } from "../../shared/types.js";
 
 let cachedResults: RankedResult[] = [];
-const cache = new Map<string, RankedResult[]>();
-const MAX_CACHE_SIZE = 50;
-
-function getCacheKey(type: "ids" | "scan", data: string[] | ScanHistoryOptions): string {
-  if (type === "ids") {
-    const ids = data as string[];
-    return `ids:${ids.slice().sort().join(",")}`;
-  } else {
-    const opts = data as ScanHistoryOptions;
-    return `scan:${opts.limit}:${opts.scanAll}:${opts.filter || ""}`;
-  }
-}
-
-function addToCache(key: string, results: RankedResult[]) {
-  if (cache.size >= MAX_CACHE_SIZE) {
-    const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) cache.delete(firstKey);
-  }
-  cache.set(key, results);
-}
+const cache = new ResultsCache(50);
 
 export async function init(sdk: SDK) {
   const api = sdk.api as APISDK<BackendEndpoints, Record<string, never>>;
@@ -34,18 +16,19 @@ export async function init(sdk: SDK) {
 
   api.register("rankRequests", async (sdkInstance: SDK, ids: string[]) => {
     try {
-      const cacheKey = getCacheKey("ids", ids);
-      if (cache.has(cacheKey)) {
+      const cacheKey = ResultsCache.createKey("ids", ids);
+      const cached = cache.get(cacheKey);
+      
+      if (cached) {
         sdkInstance.console.log("AnomalyRanker: Cache hit for rankRequests");
-        const results = cache.get(cacheKey)!;
-        cachedResults = results;
-        return results;
+        cachedResults = cached;
+        return cached;
       }
 
       sdkInstance.console.log(`AnomalyRanker: Ranking ${ids.length} requests...`);
       const results = await engine.rank(sdkInstance, ids);
       cachedResults = results;
-      addToCache(cacheKey, results);
+      cache.set(cacheKey, results);
       return results;
     } catch (error: unknown) {
       sdkInstance.console.error("AnomalyRanker: rankRequests failed", error);
@@ -53,19 +36,19 @@ export async function init(sdk: SDK) {
     }
   });
 
-  api.register("scanHistory", async (sdkInstance: SDK, options) => {
+  api.register("scanHistory", async (sdkInstance: SDK, options: ScanHistoryOptions) => {
     try {
-      const cacheKey = getCacheKey("scan", options);
-      if (cache.has(cacheKey)) {
+      const cacheKey = ResultsCache.createKey("scan", options);
+      const cached = cache.get(cacheKey);
+      
+      if (cached) {
         sdkInstance.console.log("AnomalyRanker: Cache hit for scanHistory");
-        const results = cache.get(cacheKey)!;
-        cachedResults = results;
-        return results;
+        cachedResults = cached;
+        return cached;
       }
 
       sdkInstance.console.log(`AnomalyRanker: Scanning history with limit=${options.limit}, scanAll=${options.scanAll}, filter="${options.filter || ""}"`);
       
-      // Scan history to collect request IDs
       const ids = await scanner.scan(sdkInstance, options);
       
       if (ids.length === 0) {
@@ -74,10 +57,9 @@ export async function init(sdk: SDK) {
         return [];
       }
       
-      // Rank the collected requests
       const results = await engine.rank(sdkInstance, ids);
       cachedResults = results;
-      addToCache(cacheKey, results);
+      cache.set(cacheKey, results);
       
       sdkInstance.console.log(`AnomalyRanker: Scan complete, ranked ${results.length} requests`);
       return results;

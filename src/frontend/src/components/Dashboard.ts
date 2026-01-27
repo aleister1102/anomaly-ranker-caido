@@ -2,6 +2,7 @@ import type { Caido } from "@caido/sdk-frontend";
 import { BackendEndpoints, RankedResult } from "../../../shared/types.js";
 import { ResultsTable } from "./ResultsTable.js";
 import { RequestViewer } from "./RequestViewer.js";
+import { Toolbar } from "./Toolbar.js";
 import { toCsv, toFfuf } from "../utils/export.js";
 
 // Module-level state for scan settings persistence
@@ -12,28 +13,233 @@ let httpqlFilter = "";
 export function createDashboard(caido: Caido<BackendEndpoints>) {
   const container = document.createElement("div");
   container.className = "anomaly-dashboard";
-  container.style.display = "flex";
-  container.style.flexDirection = "column";
-  container.style.height = "100%";
-  container.style.padding = "20px";
-  container.style.boxSizing = "border-box";
-  container.style.gap = "20px";
-  container.style.outline = "none";
-  container.style.boxShadow = "none";
+  container.style.cssText = "display: flex; flex-direction: column; height: 100%; padding: 8px; box-sizing: border-box; gap: 8px; outline: none;";
   container.setAttribute("tabindex", "-1");
 
+  // Prevent focus outline on modifier keys
   container.addEventListener("keydown", (e) => {
-    if (e.key === "Shift" || e.key === "CapsLock" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") {
+    if (["Shift", "CapsLock", "Control", "Alt", "Meta"].includes(e.key)) {
       const activeElement = document.activeElement;
-      if (activeElement && (activeElement.tagName === "INPUT" || activeElement.tagName === "SELECT" || activeElement.tagName === "TEXTAREA")) {
+      if (activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(activeElement.tagName)) {
         return;
       }
       (activeElement as HTMLElement)?.blur();
     }
   });
 
+  // Add styles
   const style = document.createElement("style");
-  style.textContent = `
+  style.textContent = getStyles();
+  container.appendChild(style);
+
+  // Components
+  const viewer = new RequestViewer(caido);
+  const table = new ResultsTable((id) => viewer.show(id));
+  
+  let currentResults: RankedResult[] = [];
+
+  // Toolbar
+  const toolbar = new Toolbar(caido, {
+    scanLimit,
+    scanAll,
+    httpqlFilter,
+    onScan: async (limit, all, filter) => {
+      progressContainer.style.display = "flex";
+      try {
+        const start = performance.now();
+        const results = await caido.backend.scanHistory({
+          limit: all ? 100000 : limit,
+          scanAll: all,
+          filter: filter || undefined,
+        });
+        const durationMs = Math.max(0, performance.now() - start);
+
+        if (results.length === 0) {
+          caido.window.showToast(
+            `No requests found (took ${durationMs.toFixed(0)} ms)`,
+            { variant: "info", duration: 3000 }
+          );
+        } else {
+          caido.window.showToast(
+            `Scanned ${results.length} requests in ${durationMs.toFixed(0)} ms`,
+            { variant: "success", duration: 3000 }
+          );
+        }
+        
+        // Update persisted state
+        const values = toolbar.getValues();
+        scanLimit = values.scanLimit;
+        scanAll = values.scanAll;
+        httpqlFilter = values.httpqlFilter;
+        
+        updateDashboard(results);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        caido.window.showToast(`Scan failed: ${errorMsg}`, { variant: "error", duration: 5000 });
+        caido.log.error("Scan history failed: " + errorMsg);
+      } finally {
+        progressContainer.style.display = "none";
+      }
+    },
+    onBulkAction: (action) => handleBulkAction(action),
+  });
+
+  // Header
+  const header = createHeader();
+
+  // Progress indicator
+  const progressContainer = document.createElement("div");
+  progressContainer.style.cssText = "display: none; align-items: center; gap: 10px;";
+  progressContainer.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span>Ranking requests...</span>`;
+
+  // Table container
+  const tableContainer = document.createElement("div");
+  tableContainer.className = "anomaly-table-container";
+  tableContainer.appendChild(table.getElement());
+
+  // Assemble dashboard
+  container.appendChild(header);
+  container.appendChild(toolbar.getElement());
+  container.appendChild(progressContainer);
+  container.appendChild(tableContainer);
+  container.appendChild(viewer.getElement());
+
+  // Bulk action handler
+  async function handleBulkAction(action: string) {
+    const selectedIds = table.getSelectedIds();
+
+    if (action === "clear-results") {
+      caido.backend.clearResults();
+      updateDashboard([]);
+      return;
+    }
+
+    if (action === "select-all") {
+      table.selectAll();
+      return;
+    }
+    
+    if (action === "deselect-all") {
+      table.deselectAll();
+      return;
+    }
+    
+    const targets = selectedIds.length > 0 
+      ? currentResults.filter(r => selectedIds.includes(r.id as unknown as string))
+      : currentResults;
+
+    if (targets.length === 0) {
+      caido.window.showToast("No results to process", { variant: "info", duration: 2000 });
+      return;
+    }
+
+    switch (action) {
+      case "repeater":
+        await sendToRepeater(targets);
+        break;
+      case "copy-urls":
+        await copyUrls(targets);
+        break;
+      case "copy-curls":
+        await copyCurls(targets);
+        break;
+      case "csv":
+        exportCsv(targets);
+        break;
+      case "ffuf":
+        alert(toFfuf(targets));
+        break;
+    }
+  }
+
+  async function sendToRepeater(targets: RankedResult[]) {
+    let count = 0;
+    for (const r of targets) {
+      if (r.id) {
+        await caido.replay.createSession({ type: "ID", id: r.id as string });
+        count++;
+      }
+    }
+    caido.window.showToast(`Sent ${count} requests to Replay`, { variant: "success", duration: 2000 });
+  }
+
+  async function copyUrls(targets: RankedResult[]) {
+    const urls = targets.map(r => r.url).join("\n");
+    navigator.clipboard.writeText(urls);
+    caido.window.showToast(`${targets.length} URLs copied`, { variant: "success", duration: 2000 });
+  }
+
+  async function copyCurls(targets: RankedResult[]) {
+    const curls: string[] = [];
+    for (const r of targets) {
+      const record = await caido.graphql.request({ id: r.id as string });
+      if (record?.request?.raw) {
+        const raw = record.request.raw;
+        const lines = raw.split("\r\n");
+        const [method] = lines[0].split(" ");
+        const headers = lines.slice(1, lines.indexOf("")).map(h => `-H "${h}"`).join(" ");
+        curls.push(`curl -X ${method} ${headers} "${r.url}"`);
+      }
+    }
+    navigator.clipboard.writeText(curls.join("\n\n"));
+    caido.window.showToast(`${curls.length} cURL commands copied`, { variant: "success", duration: 2000 });
+  }
+
+  function exportCsv(targets: RankedResult[]) {
+    const csv = toCsv(targets);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `anomaly_results_${new Date().toISOString()}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    caido.window.showToast(`Exported ${targets.length} results to CSV`, { variant: "success", duration: 2000 });
+  }
+
+  function updateDashboard(results: RankedResult[]) {
+    currentResults = results;
+    table.update(currentResults);
+  }
+
+  return {
+    element: container,
+    onEnter: async () => {
+      toolbar.setValues(scanLimit, scanAll, httpqlFilter);
+      const results = await caido.backend.getResults();
+      updateDashboard(results);
+    },
+    rankRequests: async (ids: string[]) => {
+      progressContainer.style.display = "flex";
+      try {
+        const results = await caido.backend.rankRequests(ids);
+        updateDashboard(results);
+      } catch (err) {
+        caido.log.error("Failed to rank requests: " + err);
+      } finally {
+        progressContainer.style.display = "none";
+      }
+    }
+  };
+}
+
+function createHeader(): HTMLElement {
+  const header = document.createElement("div");
+  header.className = "anomaly-header";
+  
+  const title = document.createElement("h2");
+  title.textContent = "Anomaly Ranker";
+  title.style.margin = "0";
+  header.appendChild(title);
+
+  return header;
+}
+
+function getStyles(): string {
+  return `
     .anomaly-dashboard,
     .anomaly-dashboard:focus,
     .anomaly-dashboard:focus-visible,
@@ -47,6 +253,14 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     .anomaly-dashboard ::selection {
       background: var(--background-active, rgba(59, 130, 246, 0.3));
       color: inherit;
+    }
+    .anomaly-dashboard,
+    .anomaly-dashboard input,
+    .anomaly-dashboard button,
+    .anomaly-dashboard select,
+    .anomaly-dashboard textarea {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+        Arial, sans-serif;
     }
     .anomaly-dashboard .caido-table-header [data-field]:hover {
       background-color: var(--background-hover);
@@ -101,9 +315,9 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     }
     .anomaly-toolbar {
       display: flex;
-      align-items: flex-end;
+      align-items: stretch;
       gap: 16px;
-      padding: 16px;
+      padding: 10px 16px;
       background: var(--background-overlay);
       border: 1px solid var(--border-color);
       border-radius: 8px;
@@ -271,14 +485,13 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       border-color: var(--color-primary, #3b82f6);
     }
     .custom-dropdown-trigger::after {
-      content: "\f0d7";
-      font-family: "Font Awesome 5 Free";
-      font-weight: 900;
+      content: "▼";
       position: absolute;
       right: 12px;
       top: 50%;
       transform: translateY(-50%);
       pointer-events: none;
+      font-size: 10px;
     }
     .custom-dropdown-menu {
       position: absolute;
@@ -322,439 +535,4 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       margin: 4px 0;
     }
   `;
-  container.appendChild(style);
-
-  // --- Components ---
-  const viewer = new RequestViewer(caido);
-  const table = new ResultsTable((id) => viewer.show(id));
-
-  // --- Header ---
-  const header = document.createElement("div");
-  header.className = "anomaly-header";
-  
-  const title = document.createElement("h2");
-  title.textContent = "Anomaly Ranker";
-  title.style.margin = "0";
-  header.appendChild(title);
-
-  const clearBtn = caido.ui.button({
-    label: "Clear Results",
-    variant: "tertiary",
-    size: "small",
-  });
-  clearBtn.addEventListener("click", async () => {
-    await caido.backend.clearResults();
-    updateDashboard([]);
-  });
-  header.appendChild(clearBtn);
-
-  container.appendChild(header);
-
-  // --- Toolbar ---
-  const toolbar = document.createElement("div");
-  toolbar.className = "anomaly-toolbar";
-
-  // Scan Group
-  const scanGroup = document.createElement("div");
-  scanGroup.className = "anomaly-toolbar-group";
-  
-  const scanLabel = document.createElement("div");
-  scanLabel.className = "anomaly-toolbar-label";
-  scanLabel.textContent = "Scan History";
-  scanGroup.appendChild(scanLabel);
-
-  const scanControls = document.createElement("div");
-  scanControls.className = "anomaly-toolbar-controls";
-
-  const scanButton = caido.ui.button({
-    label: "Scan",
-    variant: "primary",
-    size: "small",
-  });
-
-  const limitInput = document.createElement("input");
-  limitInput.type = "number";
-  limitInput.className = "caido-input";
-  limitInput.style.width = "75px";
-  limitInput.min = "1";
-  limitInput.max = "100000";
-  limitInput.value = scanLimit.toString();
-  limitInput.placeholder = "Limit";
-  limitInput.title = "Maximum requests to scan";
-
-  const scanAllWrapper = document.createElement("div");
-  scanAllWrapper.className = "caido-checkbox-wrapper";
-  
-  const scanAllCheckbox = document.createElement("input");
-  scanAllCheckbox.type = "checkbox";
-  scanAllCheckbox.id = "scan-all-checkbox";
-  scanAllCheckbox.checked = scanAll;
-
-  const scanAllLabel = document.createElement("label");
-  scanAllLabel.htmlFor = "scan-all-checkbox";
-  scanAllLabel.textContent = "All";
-  scanAllLabel.title = "Scan all requests (ignores limit)";
-
-  scanAllWrapper.appendChild(scanAllCheckbox);
-  scanAllWrapper.appendChild(scanAllLabel);
-
-  scanControls.appendChild(scanButton);
-  scanControls.appendChild(limitInput);
-  scanControls.appendChild(scanAllWrapper);
-  scanGroup.appendChild(scanControls);
-
-  // Divider
-  const divider1 = document.createElement("div");
-  divider1.className = "anomaly-toolbar-divider";
-
-  // Filter Group
-  const filterGroup = document.createElement("div");
-  filterGroup.className = "anomaly-toolbar-group";
-  filterGroup.style.flex = "1";
-
-  const filterLabel = document.createElement("div");
-  filterLabel.className = "anomaly-toolbar-label";
-  filterLabel.textContent = "Scope Filter";
-  filterGroup.appendChild(filterLabel);
-
-  const filterControls = document.createElement("div");
-  filterControls.className = "anomaly-toolbar-controls";
-
-  const httpqlFilterInput = document.createElement("input");
-  httpqlFilterInput.type = "text";
-  httpqlFilterInput.className = "caido-input";
-  httpqlFilterInput.style.width = "100%";
-  httpqlFilterInput.style.minWidth = "200px";
-  httpqlFilterInput.value = httpqlFilter;
-  httpqlFilterInput.placeholder = "HTTPQL filter (e.g., host:example.com)";
-  httpqlFilterInput.title = "Filter requests using HTTPQL syntax before scanning";
-
-  const httpqlErrorMsg = document.createElement("div");
-  httpqlErrorMsg.className = "httpql-error-message";
-
-  filterControls.appendChild(httpqlFilterInput);
-  filterControls.style.flexDirection = "column";
-  filterControls.style.alignItems = "stretch";
-  filterControls.appendChild(httpqlErrorMsg);
-  filterGroup.appendChild(filterControls);
-
-  // Divider
-  const divider2 = document.createElement("div");
-  divider2.className = "anomaly-toolbar-divider";
-
-  // Actions Group
-  const actionsGroup = document.createElement("div");
-  actionsGroup.className = "anomaly-toolbar-group";
-
-  const actionsLabel = document.createElement("div");
-  actionsLabel.className = "anomaly-toolbar-label";
-  actionsLabel.textContent = "Bulk Actions";
-  actionsGroup.appendChild(actionsLabel);
-
-  const actionsControls = document.createElement("div");
-  actionsControls.className = "anomaly-toolbar-controls";
-
-  const createCustomDropdown = (label: string, options: { label: string, value: string, disabled?: boolean, divider?: boolean }[]) => {
-    const dropdown = document.createElement("div");
-    dropdown.className = "custom-dropdown";
-    
-    const trigger = document.createElement("div");
-    trigger.className = "custom-dropdown-trigger";
-    trigger.textContent = label;
-    dropdown.appendChild(trigger);
-
-    const menu = document.createElement("div");
-    menu.className = "custom-dropdown-menu";
-    dropdown.appendChild(menu);
-
-    options.forEach(opt => {
-      if (opt.divider) {
-        const divider = document.createElement("div");
-        divider.className = "custom-dropdown-divider";
-        menu.appendChild(divider);
-        return;
-      }
-
-      const item = document.createElement("div");
-      item.className = "custom-dropdown-item";
-      if (opt.disabled) item.classList.add("disabled");
-      item.textContent = opt.label;
-      
-      if (!opt.disabled) {
-        item.addEventListener("click", () => {
-          handleBulkAction(opt.value);
-          menu.classList.remove("open");
-        });
-      }
-      
-      menu.appendChild(item);
-    });
-
-    trigger.addEventListener("click", (e) => {
-      e.stopPropagation();
-      // Close all other dropdowns
-      document.querySelectorAll(".custom-dropdown-menu").forEach(m => {
-        if (m !== menu) m.classList.remove("open");
-      });
-      menu.classList.toggle("open");
-    });
-
-    return dropdown;
-  };
-
-  const selectionDropdown = createCustomDropdown("Selection", [
-    { label: "Select All", value: "select-all" },
-    { label: "Deselect All", value: "deselect-all" },
-  ]);
-
-  const exportDropdown = createCustomDropdown("Export", [
-    { label: "Send to Replay", value: "repeater" },
-    { label: "Copy URLs", value: "copy-urls" },
-    { label: "Copy as cURL", value: "copy-curls" },
-    { label: "Export CSV", value: "csv" },
-    { label: "FFUF Snippet", value: "ffuf" },
-  ]);
-
-  document.addEventListener("click", () => {
-    document.querySelectorAll(".custom-dropdown-menu").forEach(m => m.classList.remove("open"));
-  });
-
-  actionsControls.appendChild(selectionDropdown);
-  actionsControls.appendChild(exportDropdown);
-  actionsGroup.appendChild(actionsControls);
-
-  toolbar.appendChild(scanGroup);
-  toolbar.appendChild(divider1);
-  toolbar.appendChild(filterGroup);
-  toolbar.appendChild(divider2);
-  toolbar.appendChild(actionsGroup);
-
-  container.appendChild(toolbar);
-
-  // Scan button click handler
-  scanButton.addEventListener("click", async () => {
-    // Validate limit
-    const limit = parseInt(limitInput.value);
-    if (isNaN(limit) || limit < 1 || limit > 100000) {
-      caido.window.showToast("Limit must be between 1 and 100000", { variant: "error", duration: 3000 });
-      return;
-    }
-
-    // Show loading indicator and disable button
-    (scanButton as HTMLButtonElement).disabled = true;
-    progressContainer.style.display = "flex";
-
-    try {
-      const start = performance.now();
-      // Call backend scanHistory
-      const results = await caido.backend.scanHistory({
-        limit: scanAll ? 100000 : limit,
-        scanAll: scanAll,
-        filter: httpqlFilter || undefined,
-      });
-      const durationMs = Math.max(0, performance.now() - start);
-
-      // Update results table
-      if (results.length === 0) {
-        caido.window.showToast(
-          `No requests found (took ${durationMs.toFixed(0)} ms)`,
-          { variant: "info", duration: 3000 }
-        );
-      } else {
-        caido.window.showToast(
-          `Scanned ${results.length} requests in ${durationMs.toFixed(0)} ms`,
-          { variant: "success", duration: 3000 }
-        );
-      }
-      updateDashboard(results);
-    } catch (err) {
-      // Show error message
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      caido.window.showToast(`Scan failed: ${errorMsg}`, { variant: "error", duration: 5000 });
-      caido.log.error("Scan history failed: " + errorMsg);
-    } finally {
-      // Re-enable button and hide loading indicator
-      (scanButton as HTMLButtonElement).disabled = false;
-      progressContainer.style.display = "none";
-    }
-  });
-
-  // Settings persistence - update state variables when inputs change
-  limitInput.addEventListener("input", () => {
-    const value = parseInt(limitInput.value);
-    if (!isNaN(value)) {
-      scanLimit = value;
-    }
-  });
-
-  let validationTimeout: ReturnType<typeof setTimeout>;
-  httpqlFilterInput.addEventListener("input", () => {
-    httpqlFilter = httpqlFilterInput.value;
-
-    clearTimeout(validationTimeout);
-    validationTimeout = setTimeout(async () => {
-      const result = await caido.backend.validateHttpql(httpqlFilter);
-      if (result.valid) {
-        httpqlFilterInput.classList.remove("invalid");
-        httpqlFilterInput.classList.add("valid");
-        httpqlErrorMsg.style.display = "none";
-      } else {
-        httpqlFilterInput.classList.remove("valid");
-        httpqlFilterInput.classList.add("invalid");
-        httpqlErrorMsg.textContent = result.error || "Invalid HTTPQL filter";
-        httpqlErrorMsg.style.display = "block";
-      }
-
-      if (!httpqlFilter.trim()) {
-        httpqlFilterInput.classList.remove("valid", "invalid");
-        httpqlErrorMsg.style.display = "none";
-      }
-    }, 300);
-  });
-
-  const handleBulkAction = async (val: string) => {
-    if (!val) return;
-
-    const selectedIds = table.getSelectedIds();
-
-    if (val === "select-all") {
-      table.selectAll();
-      return;
-    } else if (val === "deselect-all") {
-      table.deselectAll();
-      return;
-    }
-    
-    const targets = selectedIds.length > 0 
-      ? filteredResults.filter(r => selectedIds.includes(r.id as unknown as string))
-      : filteredResults;
-
-    if (targets.length === 0) {
-      caido.window.showToast("No results to process", { variant: "info", duration: 2000 });
-      return;
-    }
-
-    if (val === "repeater") {
-      let count = 0;
-      for (const r of targets) {
-        if (r.id) {
-          await caido.replay.createSession({ type: "ID", id: r.id as string });
-          count++;
-        }
-      }
-      caido.window.showToast(`Sent ${count} requests to Replay`, { variant: "success", duration: 2000 });
-    } else if (val === "copy-urls") {
-      const urls = targets.map(r => r.url).join("\n");
-      navigator.clipboard.writeText(urls);
-      caido.window.showToast(`${targets.length} URLs copied`, { variant: "success", duration: 2000 });
-    } else if (val === "copy-curls") {
-      const curls: string[] = [];
-      for (const r of targets) {
-        const record = await caido.graphql.request({ id: r.id as string });
-        if (record?.request?.raw) {
-          const raw = record.request.raw;
-          const lines = raw.split("\r\n");
-          const [method, path] = lines[0].split(" ");
-          const headers = lines.slice(1, lines.indexOf("")).map(h => `-H "${h}"`).join(" ");
-          const url = r.url;
-          curls.push(`curl -X ${method} ${headers} "${url}"`);
-        }
-      }
-      navigator.clipboard.writeText(curls.join("\n\n"));
-      caido.window.showToast(`${curls.length} cURL commands copied`, { variant: "success", duration: 2000 });
-    } else if (val === "csv") {
-      const csv = toCsv(targets);
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", `anomaly_results_${new Date().toISOString()}.csv`);
-      link.style.visibility = "hidden";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      caido.window.showToast(`Exported ${targets.length} results to CSV`, { variant: "success", duration: 2000 });
-    } else if (val === "ffuf") {
-      alert(toFfuf(targets));
-    }
-  };
-
-  scanAllCheckbox.addEventListener("change", () => {
-    scanAll = scanAllCheckbox.checked;
-  });
-
-  // --- Results Filter ---
-  const filterInput = document.createElement("input");
-  filterInput.type = "text";
-  filterInput.placeholder = "Filter results (e.g. url:example, method:POST, status:404)...";
-  filterInput.className = "caido-input";
-  filterInput.style.width = "100%";
-  container.appendChild(filterInput);
-
-  const progressContainer = document.createElement("div");
-  progressContainer.style.display = "none";
-  progressContainer.style.alignItems = "center";
-  progressContainer.style.gap = "10px";
-  progressContainer.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span>Ranking requests...</span>`;
-  container.appendChild(progressContainer);
-
-  container.appendChild(table.getElement());
-  container.appendChild(viewer.getElement());
-
-  let currentResults: RankedResult[] = [];
-  let filteredResults: RankedResult[] = [];
-
-  function updateDashboard(results: RankedResult[]) {
-    currentResults = results;
-    applyFilter();
-  }
-
-  function applyFilter() {
-    const query = filterInput.value.toLowerCase();
-    filteredResults = currentResults.filter(r => {
-      if (!query) return true;
-      if (query.includes(":")) {
-        const [key, val] = query.split(":");
-        if (key === "url") return r.url.toLowerCase().includes(val);
-        if (key === "method") return r.method.toLowerCase().includes(val);
-        if (key === "status") return r.statusCode.toString().includes(val);
-        if (key === "type") return r.contentType.toLowerCase().includes(val);
-      }
-      return (
-        r.url.toLowerCase().includes(query) ||
-        r.method.toLowerCase().includes(query) ||
-        r.statusCode.toString().includes(query) ||
-        r.contentType.toLowerCase().includes(query)
-      );
-    });
-
-    table.update(filteredResults);
-  }
-
-  filterInput.addEventListener("input", applyFilter);
-
-  return {
-    element: container,
-    onEnter: async () => {
-      // Restore persisted scan settings
-      limitInput.value = scanLimit.toString();
-      httpqlFilterInput.value = httpqlFilter;
-      scanAllCheckbox.checked = scanAll;
-
-      const results = await caido.backend.getResults();
-      updateDashboard(results);
-    },
-    rankRequests: async (ids: string[]) => {
-      progressContainer.style.display = "flex";
-      try {
-        const results = await caido.backend.rankRequests(ids);
-        updateDashboard(results);
-      } catch (err) {
-        caido.log.error("Failed to rank requests: " + err);
-      } finally {
-        progressContainer.style.display = "none";
-      }
-    }
-  };
 }

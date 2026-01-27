@@ -118,7 +118,6 @@ export class RankingEngine {
   }
 
   private extractMimeType(contentType: string): string {
-    if (!contentType) return "unknown";
-    return contentType.split(";")[0].trim().toLowerCase();
+    return contentType ? contentType.split(";")[0].trim().toLowerCase() : "unknown";
   }
 }

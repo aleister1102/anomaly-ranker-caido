@@ -81,9 +81,7 @@ export class RequestViewer {
     
     // Clear everything except resizer
     Array.from(this.container.childNodes).forEach(node => {
-      if (node !== this.resizer) {
-        this.container.removeChild(node);
-      }
+      if (node !== this.resizer) this.container.removeChild(node);
     });
 
     const viewerHeader = document.createElement("div");
@@ -92,25 +90,20 @@ export class RequestViewer {
     
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&times;";
-    closeBtn.style.background = "none";
-    closeBtn.style.border = "none";
-    closeBtn.style.fontSize = "20px";
-    closeBtn.style.cursor = "pointer";
-    closeBtn.style.color = "var(--color-foreground)";
-    closeBtn.addEventListener("click", () => {
-      this.hide();
-    });
+    closeBtn.style.cssText = "background: none; border: none; font-size: 20px; cursor: pointer; color: var(--color-foreground);";
+    closeBtn.addEventListener("click", () => this.hide());
     viewerHeader.appendChild(closeBtn);
     
     const viewerBody = document.createElement("div");
     viewerBody.className = "anomaly-viewer-body";
     
+    const wrapperStyle = "flex: 1; width: 50%; min-width: 0; overflow: hidden;";
     const requestWrapper = document.createElement("div");
-    requestWrapper.style.cssText = "flex: 1; width: 50%; min-width: 0; overflow: hidden;";
+    requestWrapper.style.cssText = wrapperStyle;
     requestWrapper.appendChild(this.requestEditor.getElement());
 
     const responseWrapper = document.createElement("div");
-    responseWrapper.style.cssText = "flex: 1; width: 50%; min-width: 0; overflow: hidden;";
+    responseWrapper.style.cssText = wrapperStyle;
     responseWrapper.appendChild(this.responseEditor.getElement());
 
     viewerBody.appendChild(requestWrapper);
