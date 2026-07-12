@@ -3,8 +3,8 @@ import { defineConfig } from "@caido-community/dev";
 export default defineConfig({
   id: "anomaly-ranker",
   name: "Anomaly Ranker",
-  description: "Calculate anomaly ranks using a Burp-compatible categorical frequency scorer.",
-  version: "1.3.0",
+  description: "Calculate anomaly ranks using a Burp-inspired categorical frequency scorer.",
+  version: "1.4.0",
   author: {
     name: "insomnia1102",
     email: "marucube35@gmail.com",
