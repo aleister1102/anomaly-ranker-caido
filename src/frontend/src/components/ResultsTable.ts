@@ -32,6 +32,7 @@ export class ResultsTable {
   private columns: ColumnConfig[] = [
     { field: "id", label: "ID", width: 240, minWidth: 140 },
     { field: "rank", label: "Rank", width: 60, minWidth: 40 },
+    { field: "rawRank", label: "Raw", width: 70, minWidth: 50 },
     { field: "method", label: "Method", width: 70, minWidth: 50 },
     { field: "statusCode", label: "Status", width: 60, minWidth: 50 },
     { field: "contentLength", label: "Length", width: 80, minWidth: 50 },
@@ -279,51 +280,51 @@ export class ResultsTable {
     this.visibleEnd = end;
 
     const visibleResults = this.results.slice(start, end);
-    
-    this.tbody.innerHTML = visibleResults.map((r, i) => {
+
+    this.tbody.replaceChildren();
+    for (let i = 0; i < visibleResults.length; i++) {
+      const r = visibleResults[i];
       const actualIndex = start + i;
       const topOffset = actualIndex * ROW_HEIGHT;
       const rowBgColor = getRowBackgroundColor(r.statusCode, r.contentType);
       const indicatorColor = getRowColor(r.statusCode, r.contentType);
-      
-      const cells = this.columns.map((col, colIdx) => {
-        const widthStyle = `width: ${this.getColumnWidthPercent(colIdx)}; min-width: ${col.minWidth}px; flex-shrink: 0;`;
-        const value = this.getCellValue(r, col.field);
-        const extraStyle = colIdx === 0 
-          ? `border-left: 4px solid ${indicatorColor};` 
-          : "";
-        const rankClass = col.field === "rank" && r.rank > 70 ? "rank-high" : "";
-        return `<div class="${rankClass}" style="${widthStyle} ${extraStyle} padding: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box;">${value}</div>`;
-      }).join("");
-      
-      return `
-        <div class="caido-table-row ${this.selectedIds.has(r.id as unknown as string) ? 'selected' : ''}" 
-            data-id="${r.id}" 
-            data-index="${actualIndex}"
-            style="position: absolute; top: ${topOffset}px; width: 100%; height: ${ROW_HEIGHT}px; display: flex; align-items: center; border-bottom: 1px solid var(--border-color); cursor: pointer; box-sizing: border-box; background-color: ${rowBgColor};">
-          ${cells}
-        </div>
-      `;
-    }).join("");
+      const idStr = String(r.id);
 
-    this.tbody.querySelectorAll(".caido-table-row").forEach(row => {
+      const row = document.createElement("div");
+      row.className = `caido-table-row${this.selectedIds.has(idStr) ? " selected" : ""}`;
+      row.setAttribute("data-id", idStr);
+      row.setAttribute("data-index", String(actualIndex));
+      row.style.cssText = `position: absolute; top: ${topOffset}px; width: 100%; height: ${ROW_HEIGHT}px; display: flex; align-items: center; border-bottom: 1px solid var(--border-color); cursor: pointer; box-sizing: border-box; background-color: ${rowBgColor};`;
+
+      this.columns.forEach((col, colIdx) => {
+        const cell = document.createElement("div");
+        const widthStyle = `width: ${this.getColumnWidthPercent(colIdx)}; min-width: ${col.minWidth}px; flex-shrink: 0;`;
+        const extraStyle = colIdx === 0 ? `border-left: 4px solid ${indicatorColor};` : "";
+        if (col.field === "rank" && r.rank > 70) {
+          cell.className = "rank-high";
+        }
+        cell.style.cssText = `${widthStyle} ${extraStyle} padding: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box;`;
+        cell.textContent = this.getCellValue(r, col.field);
+        row.appendChild(cell);
+      });
+
       row.addEventListener("click", ((event: Event) => {
         const mouseEvent = event as MouseEvent;
-        const id = (row as HTMLElement).getAttribute("data-id");
-        const indexStr = (row as HTMLElement).getAttribute("data-index");
+        const id = row.getAttribute("data-id");
+        const indexStr = row.getAttribute("data-index");
         if (!id || !indexStr) return;
 
         const currentIndex = parseInt(indexStr);
 
         if (mouseEvent.shiftKey && this.lastClickedId) {
-          const lastIndex = this.results.findIndex(r => r.id === this.lastClickedId);
+          const lastIndex = this.results.findIndex((res) => res.id === this.lastClickedId);
           const rangeStart = Math.min(currentIndex, lastIndex);
           const rangeEnd = Math.max(currentIndex, lastIndex);
-          
+
           if (!mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             this.selectedIds.clear();
           }
-          
+
           for (let idx = rangeStart; idx <= rangeEnd; idx++) {
             this.selectedIds.add(this.results[idx].id as unknown as string);
           }
@@ -342,12 +343,15 @@ export class ResultsTable {
         this.onSelect(id);
         this.updateVisibleRows();
       }) as EventListener);
-    });
+
+      this.tbody!.appendChild(row);
+    }
   }
 
   private getCellValue(r: RankedResult, field: keyof RankedResult): string {
     switch (field) {
       case "rank": return String(r.rank);
+      case "rawRank": return String(r.rawRank);
       case "method": return r.method;
       case "statusCode": return String(r.statusCode);
       case "contentLength": return String(r.contentLength);

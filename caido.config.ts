@@ -3,8 +3,8 @@ import { defineConfig } from "@caido-community/dev";
 export default defineConfig({
   id: "anomaly-ranker",
   name: "Anomaly Ranker",
-  description: "Calculate anomaly ranks using statistical outlier detection and SimHash similarity.",
-  version: "1.0.4",
+  description: "Calculate anomaly ranks using a Burp-compatible categorical frequency scorer.",
+  version: "1.2.0",
   author: {
     name: "insomnia1102",
     email: "marucube35@gmail.com",

@@ -1,15 +1,15 @@
 # Anomaly Ranker for Caido
 
-Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. it helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
+Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. It helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
 
-The plugin identifies outliers in your traffic using statistical analysis and structural similarity (SimHash), highlighting requests that deviate from the "normal" baseline of your selection.
+The plugin uses a Burp-compatible categorical frequency scorer (v1.2) to highlight requests that deviate from the cohort baseline. SimHash and statistical hybrid scoring have been removed.
 
 ## Features
 
 - **Rank by selection**: Context menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
-- **Accurate scoring**: Statistical outliers + SimHash similarity.
-- **Fast at scale**: Optimized hashing and truncation.
-- **Productive UI**: Filterable table, viewer, and bulk actions.
+- **Burp-compatible scoring**: Categorical frequency model with raw and normalized ranks.
+- **Fast at scale**: Pure feature extraction with no external ML dependencies.
+- **Productive UI**: Filterable table with Raw column, viewer, and bulk actions.
 
 ## Screenshots
 
@@ -21,15 +21,20 @@ The plugin identifies outliers in your traffic using statistical analysis and st
 
 ## Anomaly Ranking Algorithm
 
-The final rank (0-100) is a weighted combination of two main components:
+The scorer mirrors Burp Suite Pro's ANOMALY ranker. For each cohort of responses:
 
-1.  **Statistical Outliers**:
-    - Calculates the Z-score for **Response Length**.
-    - Assigns rarity scores to **Status Codes** and **Content-Types** within the dataset.
-2.  **Structural Similarity (SimHash)**:
-    - Generates a SimHash fingerprint for every response body.
-    - Calculates the **Hamming Distance** from the centroid (the average fingerprint of the group).
-    - Responses with high distance from the centroid (unique structures) receive higher ranks.
+1. Extract categorical features per response (v1.2 implements five attributes):
+   - **Status code** - HTTP status integer
+   - **Content-Length** - declared header value, or body byte length when absent (malformed header → 0)
+   - **Body content** - CRC32 of raw body bytes (signed 32-bit)
+   - **Word count** - maximal runs of bytes `> 32` in the body
+   - **Line count** - LF count plus one when the body does not end with LF (CR ignored)
+2. For each attribute with more than one distinct value (`k > 1`), assign weight `0.9^k`.
+3. Per response, sum `weight / frequency` across dynamic attributes.
+4. **Raw rank** = `Math.round(10000 * sum)`. No-response entries score `-1` and are excluded from the frequency model.
+5. **Display rank** (0-100) min-max normalizes raw ranks across the cohort (`max === min` → 0). The existing `rank` field holds this value for coloring and sorting defaults.
+
+Results sort by raw rank descending, then request id ascending.
 
 ## Row Coloring (Crayon Rules)
 
@@ -47,18 +52,18 @@ The plugin uses standard security research color conventions:
 
 ## Installation
 
-1.  Download the `plugin_package.zip` from the latest release.
-2.  Open Caido and navigate to the **Plugins** tab.
-3.  Click **Install Plugin** and select the downloaded zip file.
-4.  The **Anomaly Rank** sidebar item should appear immediately.
+1. Download the `plugin_package.zip` from the latest release.
+2. Open Caido and navigate to the **Plugins** tab.
+3. Click **Install Plugin** and select the downloaded zip file.
+4. The **Anomaly Rank** sidebar item should appear immediately.
 
 ## Usage
 
-1.  Navigate to **HTTP History** or **Search**.
-2.  Select one or more requests you wish to analyze.
-3.  Run **Anomaly Ranker: Rank Selection** via right-click menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
-4.  The **Anomaly Rank** sidebar opens automatically.
-5.  Use the **Selection** and **Export** dropdowns to process your findings.
+1. Navigate to **HTTP History** or **Search**.
+2. Select one or more requests you wish to analyze.
+3. Run **Anomaly Ranker: Rank Selection** via right-click menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
+4. The **Anomaly Rank** sidebar opens automatically.
+5. Use the **Selection** and **Export** dropdowns to process your findings.
 
 ## Development
 
@@ -71,6 +76,7 @@ Built using the Caido Plugin SDK.
 ### Commands
 - `bun run build`: Bundle the plugin into `dist/plugin_package.zip`.
 - `bun run package`: Zip the manifest and bundled files.
+- `bun run test`: Run Vitest unit tests for the Burp scorer.
 
 ## Releasing
 
@@ -78,18 +84,18 @@ To publish a new version of the plugin, follow these steps:
 
 1. **Bump Version**: Update the version in `package.json` and `manifest.json`.
    ```json
-   "version": "1.0.x"
+   "version": "1.2.x"
    ```
 2. **Commit and Push**:
    ```bash
    git add package.json manifest.json
-   git commit -m "chore: bump version to 1.0.x"
+   git commit -m "chore: bump version to 1.2.x"
    git push origin main
    ```
 3. **Create Tag**: Push a tag matching `v*` to trigger the release workflow.
    ```bash
-   git tag v1.0.x
-   git push origin v1.0.x
+   git tag v1.2.x
+   git push origin v1.2.x
    ```
 4. **Automated Release**: GitHub Actions will automatically:
    - Build the plugin.
