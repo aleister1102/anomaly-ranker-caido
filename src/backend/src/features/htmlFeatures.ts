@@ -110,7 +110,7 @@ export interface HtmlFeatures {
 }
 
 function normalizeWhitespace(s: string): string {
-  return s.replace(/\s+/g, " ");
+  return s.replace(/\s+/gu, " ").trim();
 }
 
 export function extractHtmlFeatures(bodyBytes: Uint8Array): HtmlFeatures {
