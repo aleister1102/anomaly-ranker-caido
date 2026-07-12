@@ -2,12 +2,12 @@
 
 Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. It helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
 
-The plugin uses a Burp-compatible categorical frequency scorer (v1.3) to highlight requests that deviate from the cohort baseline. SimHash and statistical hybrid scoring have been removed.
+The plugin uses a Burp-inspired categorical frequency scorer (v1.3) that replicates the anomaly-ranking behavior of Burp Suite to highlight requests that deviate from the cohort baseline. SimHash and statistical hybrid scoring have been removed.
 
 ## Features
 
 - **Rank by selection**: Context menu, command palette, or `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS).
-- **Burp-compatible scoring**: Categorical frequency model with raw and normalized ranks, plus per-feature explainability.
+- **Burp-inspired scoring**: Categorical frequency model with raw and normalized ranks, plus per-feature explainability.
 - **Fast at scale**: Bounded concurrency (50 parallel fetches) with pure feature extraction and no external ML dependencies.
 - **Productive UI**: Filterable table with Raw column, expandable "Why anomalous?" panel, cohort warnings, viewer, and bulk actions.
 
@@ -21,7 +21,7 @@ The plugin uses a Burp-compatible categorical frequency scorer (v1.3) to highlig
 
 ## Anomaly Ranking Algorithm
 
-The scorer mirrors Burp Suite Pro's ANOMALY ranker. For each cohort of responses:
+The scorer replicates the anomaly-ranking behavior of Burp Suite Pro's ANOMALY ranker. For each cohort of responses:
 
 1. Extract categorical features per response (v1.3 implements seven attributes):
    - **Status code** - HTTP status integer
@@ -103,6 +103,10 @@ To publish a new version of the plugin, follow these steps:
    - Build the plugin.
    - Sign the package using the `PRIVATE_KEY` secret.
    - Create a new GitHub release with the signed `plugin_package.zip`.
+
+## Attribution & License
+
+This plugin is an independent reimplementation inspired by Burp Suite's anomaly-ranking behavior. It is not affiliated with or endorsed by PortSwigger. "Burp" and "Burp Suite" are trademarks of PortSwigger Ltd. No Burp Suite code is included in this project.
 
 ## Credits
 
