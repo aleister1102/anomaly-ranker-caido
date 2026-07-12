@@ -38,15 +38,6 @@ export async function init(sdk: SDK) {
 
   api.register("scanHistory", async (sdkInstance: SDK, options: ScanHistoryOptions) => {
     try {
-      const cacheKey = ResultsCache.createKey("scan", options);
-      const cached = cache.get(cacheKey);
-      
-      if (cached) {
-        sdkInstance.console.log("AnomalyRanker: Cache hit for scanHistory");
-        cachedResults = cached;
-        return cached;
-      }
-
       sdkInstance.console.log(`AnomalyRanker: Scanning history with limit=${options.limit}, scanAll=${options.scanAll}, filter="${options.filter || ""}"`);
       
       const ids = await scanner.scan(sdkInstance, options);
@@ -59,7 +50,6 @@ export async function init(sdk: SDK) {
       
       const results = await engine.rank(sdkInstance, ids);
       cachedResults = results;
-      cache.set(cacheKey, results);
       
       sdkInstance.console.log(`AnomalyRanker: Scan complete, ranked ${results.length} requests`);
       return results;

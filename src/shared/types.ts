@@ -2,7 +2,8 @@ import type { ID } from "@caido/sdk-frontend";
 
 export interface RankedResult {
   id: ID;
-  rank: number;           // Higher = more anomalous (0-100)
+  rank: number;           // Higher = more anomalous (0-100 display rank)
+  rawRank: number;        // Burp-compatible integer score
   method: string;
   url: string;
   statusCode: number;

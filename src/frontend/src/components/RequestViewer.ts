@@ -86,7 +86,9 @@ export class RequestViewer {
 
     const viewerHeader = document.createElement("div");
     viewerHeader.className = "anomaly-viewer-header";
-    viewerHeader.innerHTML = `<span>Request ID: ${id}</span>`;
+    const idLabel = document.createElement("span");
+    idLabel.textContent = `Request ID: ${id}`;
+    viewerHeader.appendChild(idLabel);
     
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&times;";

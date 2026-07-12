@@ -1,13 +1,27 @@
 /// <reference types="@caido/sdk-backend" />
 
 import type { SDK } from "caido:plugin";
-import { SimHash } from "./simhash.js";
 import { RankedResult } from "../../shared/types.js";
+import { extractFeatures } from "./ranking/featureExtractor.js";
+import { scoreFeatureSets } from "./ranking/burpScorer.js";
+import type { ResponseFeatureSet } from "./ranking/types.js";
+
+function minMaxNormalize(
+  rawRank: number,
+  min: number,
+  max: number,
+): number {
+  if (max === min) {
+    return 0;
+  }
+  return Math.round(((rawRank - min) / (max - min)) * 100);
+}
+
+function extractMimeType(contentType: string): string {
+  return contentType ? contentType.split(";")[0].trim().toLowerCase() : "unknown";
+}
 
 export class RankingEngine {
-  /**
-   * Ranks a list of requests by anomaly.
-   */
   public async rank(sdk: SDK, ids: string[]): Promise<RankedResult[]> {
     if (ids.length === 0) return [];
 
@@ -15,109 +29,76 @@ export class RankingEngine {
       ids.map(async (id) => {
         const record = await sdk.requests.get(id);
         return { id, record };
-      })
+      }),
     );
 
-    const validRequests = requests.filter(r => r.record && r.record.response);
-    if (validRequests.length === 0) return [];
+    const featureSets: ResponseFeatureSet[] = requests
+      .filter((r) => r.record)
+      .map(({ id, record }) => {
+        const hasResponse = Boolean(record!.response);
+        if (!hasResponse) {
+          return {
+            requestId: id,
+            hasResponse: false,
+            values: extractFeatures({
+              statusCode: 0,
+              bodyBytes: new Uint8Array(),
+            }),
+          };
+        }
 
-    const total = validRequests.length;
-    const MAX_BODY_BYTES = 50 * 1024; // 50KB
+        const resp = record!.response!;
+        const bodyBytes = resp.getBody()?.toRaw() ?? new Uint8Array();
+        return {
+          requestId: id,
+          hasResponse: true,
+          values: extractFeatures({
+            statusCode: resp.getCode() || 0,
+            bodyBytes,
+            contentLengthHeader: resp.getHeader("Content-Length")?.[0],
+          }),
+        };
+      });
 
-    // 1. Gather statistical data
-    const lengths = new Float64Array(total);
-    const fingerprints = new BigUint64Array(total);
-    const statusCodes = new Int32Array(total);
-    const mimeTypes: string[] = [];
-    
-    const statusFreq: Record<number, number> = {};
-    const typeFreq: Record<string, number> = {};
+    const scored = scoreFeatureSets(featureSets);
+    const scoredById = new Map(scored.map((s) => [s.requestId, s]));
 
-    for (let i = 0; i < total; i++) {
-      const { record } = validRequests[i];
-      const resp = record!.response!;
-      
-      const len = resp.getBody()?.length || 0;
-      lengths[i] = len;
+    const responded = requests.filter((r) => r.record?.response);
+    if (responded.length === 0) return [];
 
-      const code = resp.getCode() || 0;
-      statusCodes[i] = code;
-      statusFreq[code] = (statusFreq[code] || 0) + 1;
-
-      const type = this.extractMimeType(resp.getHeader("Content-Type")?.[0] || "");
-      mimeTypes[i] = type;
-      typeFreq[type] = (typeFreq[type] || 0) + 1;
-
-      const body = (resp.getBody()?.toText() || "").slice(0, MAX_BODY_BYTES);
-      fingerprints[i] = SimHash.calculate(body);
+    let minRaw = Infinity;
+    let maxRaw = -Infinity;
+    for (const r of responded) {
+      const rawRank = scoredById.get(r.id)!.rawRank;
+      if (rawRank < minRaw) minRaw = rawRank;
+      if (rawRank > maxRaw) maxRaw = rawRank;
     }
 
-    // 2. Compute statistical aggregates
-    let sumLen = 0;
-    for (let i = 0; i < total; i++) sumLen += lengths[i];
-    const meanLen = sumLen / total;
-    
-    let sumSqDiff = 0;
-    for (let i = 0; i < total; i++) sumSqDiff += Math.pow(lengths[i] - meanLen, 2);
-    const stdDevLen = Math.sqrt(sumSqDiff / total) || 1;
-
-    // Find the most frequent fingerprint (centroid)
-    const fpFreq: Map<bigint, number> = new Map();
-    let maxFpFreq = 0;
-    let centroid = 0n;
-    for (let i = 0; i < total; i++) {
-      const fp = fingerprints[i];
-      const f = (fpFreq.get(fp) || 0) + 1;
-      fpFreq.set(fp, f);
-      if (f > maxFpFreq) {
-        maxFpFreq = f;
-        centroid = fp;
-      }
-    }
-
-    // 3. Calculate ranks
-    const results: RankedResult[] = [];
-    for (let i = 0; i < total; i++) {
-      const { id, record } = validRequests[i];
+    const results: RankedResult[] = responded.map(({ id, record }) => {
       const req = record!.request;
       const resp = record!.response!;
+      const score = scoredById.get(id)!;
+      const displayRank = minMaxNormalize(score.rawRank, minRaw, maxRaw);
+      const bodyLen = resp.getBody()?.length || 0;
 
-      const len = lengths[i];
-      const code = statusCodes[i];
-      const type = mimeTypes[i];
-      const fp = fingerprints[i];
-
-      // Statistical scores (0-1)
-      const lenOutlier = Math.min(Math.abs(len - meanLen) / (stdDevLen * 3), 1); // 3 sigma
-      const statusRarity = 1 - (statusFreq[code] / total);
-      const typeRarity = 1 - (typeFreq[type] / total);
-
-      const statScore = (lenOutlier + statusRarity + typeRarity) / 3;
-
-      // SimHash score (0-1)
-      const hammingDist = SimHash.hammingDistance(fp, centroid);
-      const simHashScore = hammingDist / 64;
-
-      // Final rank (0-100)
-      const finalRank = Math.round(((statScore * 0.5) + (simHashScore * 0.5)) * 100);
-
-      results.push({
+      return {
         id,
-        rank: finalRank,
+        rank: displayRank,
+        rawRank: score.rawRank,
         method: req.getMethod() || "",
         url: req.getUrl() || "",
-        statusCode: code,
-        contentLength: len,
-        contentType: type,
+        statusCode: resp.getCode() || 0,
+        contentLength: bodyLen,
+        contentType: extractMimeType(resp.getHeader("Content-Type")?.[0] || ""),
         location: resp.getHeader("Location")?.[0],
-      });
-    }
+      };
+    });
 
-    // Sort by rank descending
-    return results.sort((a, b) => b.rank - a.rank);
-  }
-
-  private extractMimeType(contentType: string): string {
-    return contentType ? contentType.split(";")[0].trim().toLowerCase() : "unknown";
+    return results.sort((a, b) => {
+      if (b.rawRank !== a.rawRank) {
+        return b.rawRank - a.rawRank;
+      }
+      return String(a.id).localeCompare(String(b.id));
+    });
   }
 }

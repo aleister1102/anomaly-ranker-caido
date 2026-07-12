@@ -27,6 +27,7 @@ export class Toolbar {
     this.scanAllCheckbox = this.container.querySelector("#scan-all-checkbox")!;
     this.httpqlFilterInput = this.container.querySelector("#httpql-filter-input")!;
     this.httpqlErrorMsg = this.container.querySelector(".httpql-error-message")!;
+    this.httpqlFilterInput.value = this.config.httpqlFilter;
     
     this.attachEventListeners();
   }
@@ -105,7 +106,6 @@ export class Toolbar {
           <datalist id="httpql-suggestions">${datalistOptions}</datalist>
           <input type="text" id="httpql-filter-input" class="caido-input" 
                  style="width: 100%; min-width: 300px; border: 2px solid #10b981; padding: 8px 12px;" 
-                 value="${this.config.httpqlFilter}"
                  placeholder="e.g., host:example.com AND method:POST"
                  title="Filter requests using HTTPQL syntax"
                  list="httpql-suggestions"

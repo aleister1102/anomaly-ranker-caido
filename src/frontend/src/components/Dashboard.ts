@@ -109,7 +109,7 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     const selectedIds = table.getSelectedIds();
 
     if (action === "clear-results") {
-      caido.backend.clearResults();
+      await caido.backend.clearResults();
       updateDashboard([]);
       return;
     }
@@ -154,35 +154,74 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
 
   async function sendToRepeater(targets: RankedResult[]) {
     let count = 0;
+    let failed = 0;
     for (const r of targets) {
-      if (r.id) {
+      if (!r.id) continue;
+      try {
         await caido.replay.createSession({ type: "ID", id: r.id as string });
         count++;
+      } catch {
+        failed++;
       }
     }
-    caido.window.showToast(`Sent ${count} requests to Replay`, { variant: "success", duration: 2000 });
+    if (failed > 0) {
+      caido.window.showToast(
+        `Sent ${count} to Replay (${failed} failed)`,
+        { variant: count > 0 ? "success" : "error", duration: 3000 },
+      );
+    } else {
+      caido.window.showToast(`Sent ${count} requests to Replay`, { variant: "success", duration: 2000 });
+    }
   }
 
   async function copyUrls(targets: RankedResult[]) {
-    const urls = targets.map(r => r.url).join("\n");
-    navigator.clipboard.writeText(urls);
-    caido.window.showToast(`${targets.length} URLs copied`, { variant: "success", duration: 2000 });
+    const urls = targets.map((r) => r.url).join("\n");
+    try {
+      await navigator.clipboard.writeText(urls);
+      caido.window.showToast(`${targets.length} URLs copied`, { variant: "success", duration: 2000 });
+    } catch {
+      caido.window.showToast("Failed to copy URLs to clipboard", { variant: "error", duration: 3000 });
+    }
+  }
+
+  function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
   async function copyCurls(targets: RankedResult[]) {
     const curls: string[] = [];
     for (const r of targets) {
       const record = await caido.graphql.request({ id: r.id as string });
-      if (record?.request?.raw) {
-        const raw = record.request.raw;
-        const lines = raw.split("\r\n");
-        const [method] = lines[0].split(" ");
-        const headers = lines.slice(1, lines.indexOf("")).map(h => `-H "${h}"`).join(" ");
-        curls.push(`curl -X ${method} ${headers} "${r.url}"`);
+      if (!record?.request?.raw) continue;
+
+      const raw = record.request.raw;
+      const lines = raw.split("\r\n");
+      const requestLine = lines[0].split(" ");
+      const method = requestLine[0] || "GET";
+      const requestUrl = requestLine[1] || r.url;
+      const headerEnd = lines.indexOf("");
+      const headerLines = headerEnd >= 0 ? lines.slice(1, headerEnd) : lines.slice(1);
+      const body = headerEnd >= 0 ? lines.slice(headerEnd + 1).join("\r\n") : "";
+
+      const parts = ["curl", "-X", shellQuote(method)];
+      for (const headerLine of headerLines) {
+        if (headerLine) {
+          parts.push("-H", shellQuote(headerLine));
+        }
       }
+      if (body) {
+        parts.push("--data", shellQuote(body));
+      }
+      parts.push(shellQuote(requestUrl));
+      curls.push(parts.join(" "));
     }
-    navigator.clipboard.writeText(curls.join("\n\n"));
-    caido.window.showToast(`${curls.length} cURL commands copied`, { variant: "success", duration: 2000 });
+
+    try {
+      await navigator.clipboard.writeText(curls.join("\n\n"));
+      caido.window.showToast(`${curls.length} cURL commands copied`, { variant: "success", duration: 2000 });
+    } catch {
+      caido.window.showToast("Failed to copy cURL commands to clipboard", { variant: "error", duration: 3000 });
+    }
   }
 
   function exportCsv(targets: RankedResult[]) {
