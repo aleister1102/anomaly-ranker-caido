@@ -1,4 +1,5 @@
 import { crc32, crc32Chars } from "../features/crc32.js";
+import { extractHtmlFeatures } from "../features/htmlFeatures.js";
 import type { FeatureName } from "./types.js";
 
 export interface ExtractFeaturesInput {
@@ -122,6 +123,7 @@ export function extractFeatures(
 ): Record<FeatureName, number> {
   const { statusCode, bodyBytes, contentLengthHeader, rawResponseBytes } = input;
   const raw = rawResponseBytes ?? new Uint8Array();
+  const html = extractHtmlFeatures(bodyBytes);
   return {
     statusCode,
     contentLength: extractContentLength(bodyBytes, contentLengthHeader),
@@ -130,5 +132,8 @@ export function extractFeatures(
     lineCount: extractLineCount(bodyBytes),
     headerNames: extractHeaderNames(raw),
     colonCount: extractColonCount(raw),
+    visibleText: html.visibleText,
+    visibleWordCount: html.visibleWordCount,
+    tagNames: html.tagNames,
   };
 }

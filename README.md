@@ -2,7 +2,7 @@
 
 Anomaly Ranker is a Caido plugin inspired by the popular Burp Suite extension of the same name. It helps security researchers identify potentially interesting or vulnerable endpoints by calculating an "Anomaly Rank" for multiple HTTP requests simultaneously.
 
-The plugin uses a Burp-inspired categorical frequency scorer (v1.3) that replicates the anomaly-ranking behavior of Burp Suite to highlight requests that deviate from the cohort baseline. SimHash and statistical hybrid scoring have been removed.
+The plugin uses a Burp-inspired categorical frequency scorer (v1.4) that replicates the anomaly-ranking behavior of Burp Suite to highlight requests that deviate from the cohort baseline. SimHash and statistical hybrid scoring have been removed.
 
 ## Features
 
@@ -23,7 +23,7 @@ The plugin uses a Burp-inspired categorical frequency scorer (v1.3) that replica
 
 The scorer replicates the anomaly-ranking behavior of Burp Suite Pro's ANOMALY ranker. For each cohort of responses:
 
-1. Extract categorical features per response (v1.3 implements seven attributes):
+1. Extract categorical features per response (v1.4 implements all ten attributes):
    - **Status code** - HTTP status integer
    - **Content-Length** - declared header value, or body byte length when absent (malformed header → 0)
    - **Body content** - CRC32 of raw body bytes (signed 32-bit)
@@ -31,6 +31,11 @@ The scorer replicates the anomaly-ranking behavior of Burp Suite Pro's ANOMALY r
    - **Line count** - LF count plus one when the body does not end with LF (CR ignored)
    - **Header names** - CRC32 of header name substrings (before the first `:`) concatenated in raw-response line order, case preserved, no separator; lines without `:` are skipped
    - **Colon count** - count of byte `0x3A` over the entire raw response (status line, headers, and body)
+   - **Visible text** - CRC32 of whitespace-normalized visible text gathered from HTML text nodes, excluding `<script>`/`<style>` inner text
+   - **Visible word count** - sum of each visible text node's own whitespace-delimited word count (no merging across nodes)
+   - **Tag names** - CRC32 over the document-order sequence of tag names plus a node-type byte (open/self-close/close)
+
+   The three HTML attributes are computed only when a minimal, dependency-free tokenizer (`src/backend/src/features/htmlFeatures.ts`) detects real markup - a non-empty node stream that isn't just a single text node - based on document structure, not the `Content-Type` header. Non-HTML and malformed bodies default these three attributes to `0` and never throw.
 2. For each attribute with more than one distinct value (`k > 1`), assign weight `0.9^k`.
 3. Per response, sum `weight / frequency` across dynamic attributes.
 4. **Raw rank** = `Math.round(10000 * sum)`. No-response entries score `-1` and are excluded from the frequency model.
@@ -78,7 +83,7 @@ Built using the Caido Plugin SDK.
 ### Commands
 - `bun run build`: Bundle the plugin into `dist/plugin_package.zip`.
 - `bun run package`: Zip the manifest and bundled files.
-- `bun run test`: Run Vitest unit tests for the Burp scorer.
+- `bun run test`: Run Vitest unit tests for the scorer, feature extractors, and static golden fixtures (see `src/backend/test/fixtures/` and `VALIDATION.md`).
 
 ## Releasing
 
@@ -86,18 +91,18 @@ To publish a new version of the plugin, follow these steps:
 
 1. **Bump Version**: Update the version in `package.json` and `manifest.json`.
    ```json
-   "version": "1.3.x"
+   "version": "1.4.x"
    ```
 2. **Commit and Push**:
    ```bash
    git add package.json manifest.json
-   git commit -m "chore: bump version to 1.3.x"
+   git commit -m "chore: bump version to 1.4.x"
    git push origin main
    ```
 3. **Create Tag**: Push a tag matching `v*` to trigger the release workflow.
    ```bash
-   git tag v1.3.x
-   git push origin v1.3.x
+   git tag v1.4.x
+   git push origin v1.4.x
    ```
 4. **Automated Release**: GitHub Actions will automatically:
    - Build the plugin.

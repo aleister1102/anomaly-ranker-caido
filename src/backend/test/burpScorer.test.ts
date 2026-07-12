@@ -18,6 +18,9 @@ const identicalValues: Record<FeatureName, number> = {
   lineCount: 2,
   headerNames: 999,
   colonCount: 10,
+  visibleText: 111,
+  visibleWordCount: 3,
+  tagNames: 222,
 };
 
 describe("scoreFeatureSets", () => {
