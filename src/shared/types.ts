@@ -29,12 +29,6 @@ export interface RankedResult {
   cohortSummary?: CohortSummary;
 }
 
-export interface RankingStats {
-  totalRequests: number;
-  duration: number;       // ms
-  timestamp: number;
-}
-
 export interface ScanHistoryOptions {
   limit: number;        // Max requests to fetch (1-100000)
   scanAll: boolean;     // If true, ignore limit and fetch all matching
