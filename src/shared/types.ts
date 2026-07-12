@@ -1,5 +1,20 @@
 import type { ID } from "@caido/sdk-frontend";
 
+export interface FeatureContribution {
+  feature: string;
+  value: number;
+  frequency: number;
+  distinctValues: number;
+  weight: number;
+  contribution: number;
+}
+
+export interface CohortSummary {
+  size: number;
+  dynamicFeatureCount: number;
+  warnings: string[];
+}
+
 export interface RankedResult {
   id: ID;
   rank: number;           // Higher = more anomalous (0-100 display rank)
@@ -10,6 +25,8 @@ export interface RankedResult {
   contentLength: number;
   contentType: string;
   location?: string;      // For 3xx redirects
+  contributions?: FeatureContribution[];
+  cohortSummary?: CohortSummary;
 }
 
 export interface RankingStats {

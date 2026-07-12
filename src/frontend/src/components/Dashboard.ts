@@ -34,9 +34,16 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
 
   // Components
   const viewer = new RequestViewer(caido);
-  const table = new ResultsTable((id) => viewer.show(id));
+  const table = new ResultsTable((id) => {
+    const result = currentResults.find((r) => String(r.id) === id);
+    viewer.show(id, result);
+  });
   
   let currentResults: RankedResult[] = [];
+
+  const cohortBanner = document.createElement("div");
+  cohortBanner.className = "anomaly-cohort-banner";
+  cohortBanner.style.display = "none";
 
   // Toolbar
   const toolbar = new Toolbar(caido, {
@@ -100,6 +107,7 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
   // Assemble dashboard
   container.appendChild(header);
   container.appendChild(toolbar.getElement());
+  container.appendChild(cohortBanner);
   container.appendChild(progressContainer);
   container.appendChild(tableContainer);
   container.appendChild(viewer.getElement());
@@ -241,7 +249,30 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
 
   function updateDashboard(results: RankedResult[]) {
     currentResults = results;
+    updateCohortBanner(results);
     table.update(currentResults);
+  }
+
+  function updateCohortBanner(results: RankedResult[]) {
+    cohortBanner.replaceChildren();
+    const warnings = results[0]?.cohortSummary?.warnings ?? [];
+    if (warnings.length === 0) {
+      cohortBanner.style.display = "none";
+      return;
+    }
+
+    cohortBanner.style.display = "block";
+    const title = document.createElement("strong");
+    title.textContent = "Cohort warning";
+    cohortBanner.appendChild(title);
+
+    const list = document.createElement("ul");
+    for (const warning of warnings) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      list.appendChild(item);
+    }
+    cohortBanner.appendChild(list);
   }
 
   return {
@@ -344,7 +375,72 @@ function getStyles(): string {
       font-weight: bold;
       color: #ef4444;
     }
-    .anomaly-header {
+    .anomaly-cohort-banner {
+      padding: 10px 14px;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.5);
+      border-radius: 6px;
+      color: var(--color-foreground);
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .anomaly-cohort-banner ul {
+      margin: 6px 0 0 0;
+      padding-left: 20px;
+    }
+    .anomaly-explain-panel {
+      border-top: 1px solid var(--border-color);
+      background: var(--background-overlay);
+      padding: 8px 12px;
+      flex-shrink: 0;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .anomaly-explain-toggle {
+      background: none;
+      border: none;
+      color: var(--color-primary, #3b82f6);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 0;
+    }
+    .anomaly-explain-toggle:hover {
+      text-decoration: underline;
+    }
+    .anomaly-explain-body {
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    .anomaly-explain-top ol {
+      margin: 4px 0 8px 0;
+      padding-left: 20px;
+    }
+    .anomaly-explain-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    .anomaly-explain-table th,
+    .anomaly-explain-table td {
+      border: 1px solid var(--border-color);
+      padding: 4px 8px;
+      text-align: left;
+    }
+    .anomaly-explain-table th {
+      background: var(--background);
+      font-weight: 600;
+    }
+    .anomaly-explain-cohort {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-color);
+    }
+    .anomaly-explain-cohort ul {
+      margin: 4px 0 0 0;
+      padding-left: 20px;
+      color: #f59e0b;
+    }
       display: flex;
       justify-content: space-between;
       align-items: center;
