@@ -7,7 +7,20 @@ import { ResultsCache } from "./cache.js";
 import { BackendEndpoints, RankedResult, ScanHistoryOptions } from "../../shared/types.js";
 
 let cachedResults: RankedResult[] = [];
+let scanGeneration = 0;
 const cache = new ResultsCache(50);
+
+function validateScanOptions(options: ScanHistoryOptions): void {
+  if (!options.scanAll) {
+    if (!Number.isInteger(options.limit) || options.limit <= 0) {
+      throw new Error("limit must be a positive integer");
+    }
+  }
+}
+
+function shouldCommitResults(generation: number): boolean {
+  return generation === scanGeneration;
+}
 
 export async function init(sdk: SDK) {
   const api = sdk.api as APISDK<BackendEndpoints, Record<string, never>>;
@@ -21,14 +34,20 @@ export async function init(sdk: SDK) {
       
       if (cached) {
         sdkInstance.console.log("AnomalyRanker: Cache hit for rankRequests");
-        cachedResults = cached;
+        const generation = ++scanGeneration;
+        if (shouldCommitResults(generation)) {
+          cachedResults = cached;
+        }
         return cached;
       }
 
       sdkInstance.console.log(`AnomalyRanker: Ranking ${ids.length} requests...`);
+      const generation = ++scanGeneration;
       const results = await engine.rank(sdkInstance, ids);
-      cachedResults = results;
-      cache.set(cacheKey, results);
+      if (shouldCommitResults(generation)) {
+        cachedResults = results;
+        cache.set(cacheKey, results);
+      }
       return results;
     } catch (error: unknown) {
       sdkInstance.console.error("AnomalyRanker: rankRequests failed", error);
@@ -38,18 +57,24 @@ export async function init(sdk: SDK) {
 
   api.register("scanHistory", async (sdkInstance: SDK, options: ScanHistoryOptions) => {
     try {
+      const generation = ++scanGeneration;
+      validateScanOptions(options);
       sdkInstance.console.log(`AnomalyRanker: Scanning history with limit=${options.limit}, scanAll=${options.scanAll}, filter="${options.filter || ""}"`);
       
       const ids = await scanner.scan(sdkInstance, options);
       
       if (ids.length === 0) {
         sdkInstance.console.log("AnomalyRanker: No requests found matching criteria");
-        cachedResults = [];
+        if (shouldCommitResults(generation)) {
+          cachedResults = [];
+        }
         return [];
       }
       
       const results = await engine.rank(sdkInstance, ids);
-      cachedResults = results;
+      if (shouldCommitResults(generation)) {
+        cachedResults = results;
+      }
       
       sdkInstance.console.log(`AnomalyRanker: Scan complete, ranked ${results.length} requests`);
       return results;

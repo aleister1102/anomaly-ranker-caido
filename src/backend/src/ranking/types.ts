@@ -3,7 +3,9 @@ export type FeatureName =
   | "contentLength"
   | "bodyContent"
   | "wordCount"
-  | "lineCount";
+  | "lineCount"
+  | "headerNames"
+  | "colonCount";
 
 export const FEATURE_NAMES: FeatureName[] = [
   "statusCode",
@@ -11,6 +13,8 @@ export const FEATURE_NAMES: FeatureName[] = [
   "bodyContent",
   "wordCount",
   "lineCount",
+  "headerNames",
+  "colonCount",
 ];
 
 export interface ResponseFeatureSet {
