@@ -9,6 +9,9 @@ const FEATURE_LABELS: Record<string, string> = {
   lineCount: "Line Count",
   headerNames: "Header Names",
   colonCount: "Colon Count",
+  visibleText: "Visible Text",
+  visibleWordCount: "Visible Word Count",
+  tagNames: "Tag Names",
 };
 
 export class RequestViewer {

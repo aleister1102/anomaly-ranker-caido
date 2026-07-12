@@ -9,6 +9,7 @@ import { toCsv, toFfuf } from "../utils/export.js";
 let scanLimit = 500;
 let scanAll = false;
 let httpqlFilter = "";
+let scanSeq = 0;
 
 export function createDashboard(caido: Caido<BackendEndpoints>) {
   const container = document.createElement("div");
@@ -51,6 +52,7 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
     scanAll,
     httpqlFilter,
     onScan: async (limit, all, filter) => {
+      const seq = ++scanSeq;
       progressContainer.style.display = "flex";
       try {
         const start = performance.now();
@@ -59,6 +61,9 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
           scanAll: all,
           filter: filter || undefined,
         });
+        if (seq !== scanSeq) {
+          return;
+        }
         const durationMs = Math.max(0, performance.now() - start);
 
         if (results.length === 0) {
@@ -283,9 +288,13 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       updateDashboard(results);
     },
     rankRequests: async (ids: string[]) => {
+      const seq = ++scanSeq;
       progressContainer.style.display = "flex";
       try {
         const results = await caido.backend.rankRequests(ids);
+        if (seq !== scanSeq) {
+          return;
+        }
         updateDashboard(results);
       } catch (err) {
         caido.log.error("Failed to rank requests: " + err);
@@ -441,6 +450,7 @@ function getStyles(): string {
       padding-left: 20px;
       color: #f59e0b;
     }
+    .anomaly-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
