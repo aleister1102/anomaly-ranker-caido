@@ -90,7 +90,9 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
         caido.window.showToast(`Scan failed: ${errorMsg}`, { variant: "error", duration: 5000 });
         caido.log.error("Scan history failed: " + errorMsg);
       } finally {
-        progressContainer.style.display = "none";
+        if (seq === scanSeq) {
+          progressContainer.style.display = "none";
+        }
       }
     },
     onBulkAction: (action) => handleBulkAction(action),
@@ -299,7 +301,9 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
       } catch (err) {
         caido.log.error("Failed to rank requests: " + err);
       } finally {
-        progressContainer.style.display = "none";
+        if (seq === scanSeq) {
+          progressContainer.style.display = "none";
+        }
       }
     }
   };

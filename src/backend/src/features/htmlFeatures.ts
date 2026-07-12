@@ -130,6 +130,7 @@ export function extractHtmlFeatures(bodyBytes: Uint8Array): HtmlFeatures {
   for (const node of nodes) {
     if (node.kind === "text") {
       text += node.text;
+      // Per-node count is intentional (matches Burp's node-local VISIBLE_WORD_COUNT) - do not merge into a single split over the combined text.
       wordCount += node.text.split(/\s+/).filter(Boolean).length;
     } else {
       tagStream += node.name + String.fromCharCode(node.type);
