@@ -5,7 +5,7 @@ import { CohortSummary, RankedResult } from "../../shared/types.js";
 import { mapPool } from "./mapPool.js";
 import { extractFeatures } from "./ranking/featureExtractor.js";
 import { scoreFeatureSets } from "./ranking/burpScorer.js";
-import { FEATURE_NAMES, type ResponseFeatureSet } from "./ranking/types.js";
+import { FEATURE_NAMES, type FeatureName, type ResponseFeatureSet } from "./ranking/types.js";
 
 export const FETCH_CONCURRENCY = 50;
 
@@ -88,18 +88,9 @@ export class RankingEngine {
           return {
             requestId: id,
             hasResponse: false,
-            values: {
-              statusCode: 0,
-              contentLength: 0,
-              bodyContent: 0,
-              wordCount: 0,
-              lineCount: 0,
-              headerNames: 0,
-              colonCount: 0,
-              visibleText: 0,
-              visibleWordCount: 0,
-              tagNames: 0,
-            },
+            values: Object.fromEntries(
+              FEATURE_NAMES.map((n) => [n, 0]),
+            ) as Record<FeatureName, number>,
           };
         }
 
