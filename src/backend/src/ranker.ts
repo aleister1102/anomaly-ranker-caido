@@ -88,11 +88,18 @@ export class RankingEngine {
           return {
             requestId: id,
             hasResponse: false,
-            values: extractFeatures({
+            values: {
               statusCode: 0,
-              bodyBytes: new Uint8Array(),
-              rawResponseBytes: new Uint8Array(),
-            }),
+              contentLength: 0,
+              bodyContent: 0,
+              wordCount: 0,
+              lineCount: 0,
+              headerNames: 0,
+              colonCount: 0,
+              visibleText: 0,
+              visibleWordCount: 0,
+              tagNames: 0,
+            },
           };
         }
 

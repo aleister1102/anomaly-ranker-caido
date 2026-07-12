@@ -1,4 +1,4 @@
-import { RankedResult, ScanHistoryOptions } from "../../shared/types.js";
+import { RankedResult } from "../../shared/types.js";
 
 /**
  * Simple LRU cache for ranking results.
@@ -26,20 +26,11 @@ export class ResultsCache {
     this.cache.set(key, results);
   }
 
-  public has(key: string): boolean {
-    return this.cache.has(key);
-  }
-
   public clear(): void {
     this.cache.clear();
   }
 
-  public static createKey(type: "ids" | "scan", data: string[] | ScanHistoryOptions): string {
-    if (type === "ids") {
-      const ids = data as string[];
-      return `ids:${ids.slice().sort().join(",")}`;
-    }
-    const opts = data as ScanHistoryOptions;
-    return `scan:${opts.limit}:${opts.scanAll}:${opts.filter || ""}`;
+  public static createKey(ids: string[]): string {
+    return `ids:${ids.slice().sort().join(",")}`;
   }
 }

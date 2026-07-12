@@ -29,7 +29,7 @@ export async function init(sdk: SDK) {
 
   api.register("rankRequests", async (sdkInstance: SDK, ids: string[]) => {
     try {
-      const cacheKey = ResultsCache.createKey("ids", ids);
+      const cacheKey = ResultsCache.createKey(ids);
       const cached = cache.get(cacheKey);
       
       if (cached) {
