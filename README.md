@@ -33,7 +33,7 @@ bun install
 bun run build   # bundles the plugin into dist/plugin_package.zip
 ```
 
-Other commands: `bun run package` (zip the manifest and already-bundled files), `bun run test` (Vitest unit tests for the scorer, feature extractors, and static golden fixtures - see `src/backend/test/fixtures/` and `VALIDATION.md`).
+`bun run package` is an alias for `bun run build` (both run `caido-dev build` and produce `dist/plugin_package.zip`). Other commands: `bun run test` (Vitest unit tests for the scorer, feature extractors, and static golden fixtures - see `src/backend/test/fixtures/` and `VALIDATION.md`).
 
 ## Anomaly Ranking Algorithm
 
@@ -43,7 +43,7 @@ The scorer replicates the anomaly-ranking behavior of Burp Suite Pro's ANOMALY r
 2. For each attribute with more than one distinct value across the cohort (`k > 1`), assign weight `0.9^k`. Attributes with `k <= 1` (every response shares the same value) contribute nothing - they carry no anomaly signal.
 3. Per response, sum `weight / frequency` across the dynamic (`k > 1`) attributes, where `frequency` is how many cohort members share that response's value for that attribute. Rarer values (low frequency) push the sum up; common values push it down.
 4. **Raw rank** = `Math.round(10000 * sum)`. No-response entries (request timed out or was never sent) score `-1` and are excluded from the frequency model entirely.
-5. **Display rank** (0-100) min-max normalizes raw ranks across the cohort (`max === min` -> 0 for everyone). The `rank` field holds this normalized value and drives table sorting defaults and coloring; `rawRank` is kept alongside it for the Raw column and for tie-breaking.
+5. **Display rank** (0-100) min-max normalizes raw ranks across the cohort (`max === min` -> 0 for everyone). The `rank` field holds this normalized value; `rawRank` is kept alongside it for the Raw column.
 
 Results sort by raw rank descending, then request id ascending. See [docs/algorithm.md](docs/algorithm.md) for a worked example and the exact derivation of each feature.
 
@@ -84,7 +84,10 @@ The plugin uses standard security research color conventions:
 2. Select one or more requests you wish to analyze.
 3. Run **Anomaly Ranker: Rank Selection** via right-click menu (request row, request, or response context), command palette (`Ctrl+K` / `Cmd+K`), or the `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS) shortcut.
 4. The **Anomaly Rank** sidebar opens automatically with the results table.
-5. The table shows both the normalized **Rank** (0-100, used for default sort/coloring) and the **Raw** score for each request, colored per the Crayon rules above.
+5. The table shows both the normalized **Rank** (0-100) and the **Raw** score for each request. Three independent visual mechanisms are at play:
+   - **Default row order** is the backend order: requests sorted by raw rank descending, tie-broken by request id ascending (`ranker.ts`). The table keeps this order (no column sort applied) until you click a column header; clicking cycles that column asc -> desc -> back to the default order.
+   - **`rank-high` highlight** (bold red text on the Rank cell) fires when the normalized `rank > 70` - independent of the current sort/column-click state.
+   - **Row left-border/background Crayon colors** (see above) come only from status code + content-type, independent of rank entirely.
 6. Expand a row's **"Why anomalous?"** panel to see the per-feature contribution breakdown: each dynamic feature's value, its frequency in the cohort, distinct-value count, weight (`0.9^k`), and its contribution to the raw rank - sorted by contribution descending, so the biggest driver of the score is always first.
 7. Watch for **cohort warnings** above the table: a small-cohort warning fires when fewer than 5 requests responded (rankings are statistically unreliable at that size), and a heterogeneous-cohort warning fires when 4 or more features vary across the cohort or the cohort spans 2+ status classes (2xx/3xx/4xx/5xx) - both signal that the cohort may not be a fair like-for-like comparison.
 8. Use the **Selection** and **Export** dropdowns to process your findings.
