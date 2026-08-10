@@ -113,8 +113,70 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s+/gu, " ").trim();
 }
 
+const REPLACEMENT = "\uFFFD";
+
+// Dependency-free UTF-8 decoder. QuickJS (the backend plugin runtime) has no
+// TextDecoder global. Never throws; invalid bytes become U+FFFD (one per
+// orphan byte for truncated sequences at end of buffer - deterministic).
+function decodeUtf8(bytes: Uint8Array): string {
+  let out = "";
+  let i = 0;
+  const len = bytes.length;
+  while (i < len) {
+    const b0 = bytes[i];
+    if (b0 < 0x80) {
+      out += String.fromCharCode(b0);
+      i += 1;
+      continue;
+    }
+    let cp: number;
+    let extra: number;
+    if (b0 >= 0xc2 && b0 <= 0xdf) {
+      cp = b0 & 0x1f;
+      extra = 1;
+    } else if (b0 >= 0xe0 && b0 <= 0xef) {
+      cp = b0 & 0x0f;
+      extra = 2;
+    } else if (b0 >= 0xf0 && b0 <= 0xf4) {
+      cp = b0 & 0x07;
+      extra = 3;
+    } else {
+      out += REPLACEMENT;
+      i += 1;
+      continue;
+    }
+    let valid = true;
+    for (let j = 1; j <= extra; j++) {
+      const bj = bytes[i + j];
+      if (bj === undefined || (bj & 0xc0) !== 0x80) {
+        valid = false;
+        break;
+      }
+      cp = (cp << 6) | (bj & 0x3f);
+    }
+    if (!valid) {
+      out += REPLACEMENT;
+      i += 1;
+      continue;
+    }
+    if (
+      (extra === 2 && cp < 0x800) ||
+      (extra === 3 && cp < 0x10000) ||
+      (cp >= 0xd800 && cp <= 0xdfff) ||
+      cp > 0x10ffff
+    ) {
+      out += REPLACEMENT;
+      i += 1;
+      continue;
+    }
+    out += String.fromCodePoint(cp);
+    i += extra + 1;
+  }
+  return out;
+}
+
 export function extractHtmlFeatures(bodyBytes: Uint8Array): HtmlFeatures {
-  const html = new TextDecoder("utf-8", { fatal: false }).decode(bodyBytes);
+  const html = decodeUtf8(bodyBytes);
   const nodes = tokenizeHtml(html);
   const hasMarkup =
     nodes.length > 0 && !(nodes.length === 1 && nodes[0].kind === "text");
