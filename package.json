@@ -1,6 +1,6 @@
 {
   "name": "anomaly-ranker",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Calculate anomaly ranks using a Burp-inspired categorical frequency scorer.",
   "main": "index.js",
   "scripts": {
