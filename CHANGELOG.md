@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## v1.5
+
+### Fixed
+- Scan crash (`Scan failed: TextDecoder is not defined`) during HTML feature extraction: the backend plugin runs in QuickJS, which has no `TextDecoder` global. Replaced it with a dependency-free UTF-8 decoder that never throws.
+
 ## v1.4
 
 ### Added
