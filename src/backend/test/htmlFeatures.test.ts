@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { crc32Chars } from "../src/features/crc32.js";
 import { extractHtmlFeatures, tokenizeHtml } from "../src/features/htmlFeatures.js";
 
 function bytes(s: string): Uint8Array {
@@ -70,6 +71,31 @@ describe("extractHtmlFeatures", () => {
       visibleWordCount: 0,
       tagNames: 0,
     });
+  });
+});
+
+describe("utf-8 decoding (no TextDecoder)", () => {
+  it("decodes 2-byte sequences without mojibake", () => {
+    const f = extractHtmlFeatures(bytes("<p>café</p>"));
+    expect(f.hasMarkup).toBe(true);
+    expect(f.visibleWordCount).toBe(1);
+    expect(f.visibleText).toBe(crc32Chars("café"));
+  });
+
+  it("decodes 4-byte code points", () => {
+    const f = extractHtmlFeatures(bytes("<p>🎉</p>"));
+    expect(f.hasMarkup).toBe(true);
+    expect(f.visibleWordCount).toBe(1);
+  });
+
+  it("does not throw on invalid lead bytes", () => {
+    const f = extractHtmlFeatures(new Uint8Array([0xff, 0xfe, 0x3c, 0x70, 0x3e]));
+    expect(f.hasMarkup).toBe(true);
+  });
+
+  it("does not throw on truncated multi-byte sequences", () => {
+    const f = extractHtmlFeatures(new Uint8Array([0xf0, 0x9f, 0x8e]));
+    expect(f.hasMarkup).toBe(false);
   });
 });
 
