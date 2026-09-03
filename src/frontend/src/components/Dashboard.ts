@@ -1,150 +1,261 @@
 import type { Caido } from "@caido/sdk-frontend";
-import { BackendEndpoints, RankedResult } from "../../../shared/types.js";
-import { ResultsTable } from "./ResultsTable.js";
-import { RequestViewer } from "./RequestViewer.js";
-import { Toolbar } from "./Toolbar.js";
+import type {
+  BackendEndpoints,
+  RankedResult,
+  RankingSnapshot,
+  ScanProgress,
+  ScanStatus,
+} from "../../../shared/types.js";
 import { toCsv, toFfuf } from "../utils/export.js";
+import { RequestViewer } from "./RequestViewer.js";
+import { ResultsTable } from "./ResultsTable.js";
+import { Toolbar } from "./Toolbar.js";
 
-// Module-level state for scan settings persistence
-let scanLimit = 500;
-let scanAll = false;
 let httpqlFilter = "";
+let inScopeOnly = true;
 let scanSeq = 0;
 
 export function createDashboard(caido: Caido<BackendEndpoints>) {
   const container = document.createElement("div");
   container.className = "anomaly-dashboard";
-  container.style.cssText = "display: flex; flex-direction: column; height: 100%; padding: 8px; box-sizing: border-box; gap: 8px; outline: none;";
-  container.setAttribute("tabindex", "-1");
 
-  // Prevent focus outline on modifier keys
-  container.addEventListener("keydown", (e) => {
-    if (["Shift", "CapsLock", "Control", "Alt", "Meta"].includes(e.key)) {
-      const activeElement = document.activeElement;
-      if (activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(activeElement.tagName)) {
-        return;
-      }
-      (activeElement as HTMLElement)?.blur();
-    }
-  });
-
-  // Add styles
   const style = document.createElement("style");
   style.textContent = getStyles();
   container.appendChild(style);
 
-  // Components
-  const viewer = new RequestViewer(caido);
-  const table = new ResultsTable((id) => {
-    const result = currentResults.find((r) => String(r.id) === id);
-    viewer.show(id, result);
+  let currentSnapshot = emptySnapshot();
+  let rateSampleCount = 0;
+  let rateSampleTime = performance.now();
+  let requestsPerSecond = 0;
+
+  const viewer = new RequestViewer(caido, (visible) => {
+    container.classList.toggle("viewer-open", visible);
   });
-  
-  let currentResults: RankedResult[] = [];
+  const table = new ResultsTable((id) => {
+    const ranked = currentSnapshot.results.find((result) => String(result.id) === id);
+    void viewer.show(id, ranked);
+  });
 
-  const cohortBanner = document.createElement("div");
-  cohortBanner.className = "anomaly-cohort-banner";
-  cohortBanner.style.display = "none";
+  const header = document.createElement("header");
+  header.className = "anomaly-header";
+  header.innerHTML = "<h1>Anomaly Ranker</h1>";
+  const progress = document.createElement("section");
+  progress.className = "anomaly-progress";
+  progress.setAttribute("aria-live", "polite");
+  progress.hidden = true;
+  progress.innerHTML = `
+    <div class="anomaly-progress-rail" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+    <div class="anomaly-progress-copy"></div>
+  `;
 
-  // Toolbar
+  const metrics = document.createElement("section");
+  metrics.className = "anomaly-metrics";
+  metrics.innerHTML = [
+    metricMarkup("high-signal", "High signal"),
+    metricMarkup("changing", "Signals"),
+    metricMarkup("status", "Status mix"),
+  ].join("");
+
+  const comparisonNote = document.createElement("section");
+  comparisonNote.className = "anomaly-comparison-note";
+  comparisonNote.hidden = true;
+
+  const resultsSection = document.createElement("section");
+  resultsSection.className = "anomaly-results";
+  const resultsHeader = document.createElement("div");
+  resultsHeader.className = "anomaly-section-header";
+  resultsHeader.innerHTML = `
+    <h2>Unique responses <span class="anomaly-result-count">0</span></h2>
+  `;
+  const tableElement = table.getElement();
+  resultsSection.append(resultsHeader, tableElement);
+
+  const notifyPaused = (count: number) => {
+    caido.window.showToast(
+      `Scan paused. Showing ${count.toLocaleString()} response groups.`,
+      { variant: "info", duration: 3000 },
+    );
+  };
+
   const toolbar = new Toolbar(caido, {
-    scanLimit,
-    scanAll,
     httpqlFilter,
-    onScan: async (limit, all, filter) => {
+    inScopeOnly,
+    onScan: async (filter, scopeOnly, resume) => {
       const seq = ++scanSeq;
-      progressContainer.style.display = "flex";
-      try {
-        const start = performance.now();
-        const results = await caido.backend.scanHistory({
-          limit: all ? 100000 : limit,
-          scanAll: all,
-          filter: filter || undefined,
-        });
-        if (seq !== scanSeq) {
-          return;
-        }
-        const durationMs = Math.max(0, performance.now() - start);
+      rateSampleCount = resume ? currentSnapshot.progress.visitedCount : 0;
+      rateSampleTime = performance.now();
+      requestsPerSecond = 0;
+      httpqlFilter = filter;
+      inScopeOnly = scopeOnly;
+      const scopeId = scopeOnly
+        ? caido.httpHistory.getScopeId()
+        : undefined;
+      let matchingCount = resume
+        ? currentSnapshot.progress.totalCount
+        : undefined;
+      const withMatchingCount = (
+        value: RankingSnapshot,
+      ): RankingSnapshot =>
+        matchingCount === undefined
+          ? value
+          : {
+              ...value,
+              progress: {
+                ...value.progress,
+                totalCount: matchingCount,
+              },
+            };
+      const matchingCountPromise = resume
+        ? Promise.resolve(matchingCount)
+        : caido.graphql
+            .requestCount({ filter: filter || undefined, scopeId })
+            .then((response) => response.requests.count.value)
+            .catch(() => undefined);
 
-        if (results.length === 0) {
+      try {
+        let snapshot = withMatchingCount(
+          await (resume
+            ? caido.backend.resumeScan()
+            : caido.backend.scanHistory({
+                filter: filter || undefined,
+                inScopeOnly: scopeOnly,
+                scopeId,
+              })),
+        );
+        void matchingCountPromise.then((count) => {
+          if (seq !== scanSeq || count === undefined) return;
+          matchingCount = count;
+          snapshot = withMatchingCount(snapshot);
+          updateDashboard(snapshot);
+        });
+        if (seq !== scanSeq) return;
+        updateDashboard(snapshot);
+
+        while (
+          seq === scanSeq &&
+          snapshot.progress.status === "scanning"
+        ) {
+          const advance = await caido.backend.advanceScan();
+          if (seq !== scanSeq) return;
+
+          const progressState = advance.progress;
+          if (
+            advance.resultsChanged ||
+            progressState.status !== "scanning"
+          ) {
+            snapshot = withMatchingCount(await caido.backend.getResults());
+            if (seq !== scanSeq) return;
+            updateDashboard(snapshot);
+          } else {
+            snapshot = withMatchingCount({
+              ...snapshot,
+              progress: {
+                ...progressState,
+                totalCount: snapshot.progress.totalCount,
+              },
+            });
+            updateScanProgress(snapshot.progress);
+          }
+        }
+
+        if (seq !== scanSeq) return;
+        if (snapshot.progress.status === "cancelled") {
+          notifyPaused(snapshot.results.length);
+        } else if (snapshot.progress.status === "failed") {
           caido.window.showToast(
-            `No requests found (took ${durationMs.toFixed(0)} ms)`,
-            { variant: "info", duration: 3000 }
+            `Scan failed: ${snapshot.progress.error ?? "Unknown error"}`,
+            { variant: "error", duration: 5000 },
           );
         } else {
           caido.window.showToast(
-            `Scanned ${results.length} requests in ${durationMs.toFixed(0)} ms`,
-            { variant: "success", duration: 3000 }
+            `Checked ${snapshot.progress.scannedCount} requests in ${formatDuration(snapshot.progress.elapsedMs)}.`,
+            { variant: "success", duration: 3000 },
           );
         }
-        
-        // Update persisted state
-        const values = toolbar.getValues();
-        scanLimit = values.scanLimit;
-        scanAll = values.scanAll;
-        httpqlFilter = values.httpqlFilter;
-        
-        updateDashboard(results);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        caido.window.showToast(`Scan failed: ${errorMsg}`, { variant: "error", duration: 5000 });
-        caido.log.error("Scan history failed: " + errorMsg);
-      } finally {
-        if (seq === scanSeq) {
-          progressContainer.style.display = "none";
-        }
+      } catch (error) {
+        if (seq !== scanSeq) return;
+        const message = error instanceof Error ? error.message : String(error);
+        const partial = await caido.backend.getResults();
+        updateDashboard(partial);
+        caido.window.showToast(`Scan failed: ${message}`, {
+          variant: "error",
+          duration: 5000,
+        });
+        caido.log.error(`Scan history failed: ${message}`);
       }
     },
-    onBulkAction: (action) => handleBulkAction(action),
+    onCancel: async () => {
+      const cancelSeq = ++scanSeq;
+      const stopped: RankingSnapshot = {
+        ...currentSnapshot,
+        progress: {
+          ...currentSnapshot.progress,
+          status: "cancelled",
+        },
+      };
+      updateDashboard(stopped);
+      notifyPaused(stopped.results.length);
+
+      void caido.backend
+        .cancelScan()
+        .then((snapshot) => {
+          if (cancelSeq !== scanSeq) return;
+          updateDashboard({
+            ...snapshot,
+            progress: {
+              ...snapshot.progress,
+              totalCount: stopped.progress.totalCount,
+            },
+          });
+        })
+        .catch((error) => {
+          caido.log.error(`Failed to cancel scan: ${String(error)}`);
+        });
+    },
+    onBulkAction: (action) => {
+      void handleBulkAction(action);
+    },
   });
+  resultsHeader.appendChild(toolbar.getResultActionsElement());
 
-  // Header
-  const header = createHeader();
+  container.append(
+    header,
+    toolbar.getElement(),
+    progress,
+    metrics,
+    comparisonNote,
+    resultsSection,
+    viewer.getElement(),
+  );
+  updateDashboard(currentSnapshot);
 
-  // Progress indicator
-  const progressContainer = document.createElement("div");
-  progressContainer.style.cssText = "display: none; align-items: center; gap: 10px;";
-  progressContainer.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span>Ranking requests...</span>`;
-
-  // Table container
-  const tableContainer = document.createElement("div");
-  tableContainer.className = "anomaly-table-container";
-  tableContainer.appendChild(table.getElement());
-
-  // Assemble dashboard
-  container.appendChild(header);
-  container.appendChild(toolbar.getElement());
-  container.appendChild(cohortBanner);
-  container.appendChild(progressContainer);
-  container.appendChild(tableContainer);
-  container.appendChild(viewer.getElement());
-
-  // Bulk action handler
-  async function handleBulkAction(action: string) {
-    const selectedIds = table.getSelectedIds();
-
+  async function handleBulkAction(action: string): Promise<void> {
     if (action === "clear-results") {
+      scanSeq++;
       await caido.backend.clearResults();
-      updateDashboard([]);
+      updateDashboard(emptySnapshot());
       return;
     }
-
     if (action === "select-all") {
       table.selectAll();
       return;
     }
-    
     if (action === "deselect-all") {
       table.deselectAll();
       return;
     }
-    
-    const targets = selectedIds.length > 0 
-      ? currentResults.filter(r => selectedIds.includes(r.id as unknown as string))
-      : currentResults;
 
+    const selectedIds = table.getSelectedIds();
+    const targets = selectedIds.length > 0
+      ? currentSnapshot.results.filter((result) =>
+          selectedIds.includes(String(result.id)),
+        )
+      : currentSnapshot.results;
     if (targets.length === 0) {
-      caido.window.showToast("No results to process", { variant: "info", duration: 2000 });
+      caido.window.showToast("No responses to use yet.", {
+        variant: "info",
+        duration: 2000,
+      });
       return;
     }
 
@@ -162,526 +273,1082 @@ export function createDashboard(caido: Caido<BackendEndpoints>) {
         exportCsv(targets);
         break;
       case "ffuf":
-        alert(toFfuf(targets));
+        await copyFfuf(targets);
         break;
     }
   }
 
-  async function sendToRepeater(targets: RankedResult[]) {
+  async function sendToRepeater(targets: RankedResult[]): Promise<void> {
     let count = 0;
     let failed = 0;
-    for (const r of targets) {
-      if (!r.id) continue;
+    for (const result of targets) {
       try {
-        await caido.replay.createSession({ type: "ID", id: r.id as string });
+        await caido.replay.createSession({ type: "ID", id: result.id as string });
         count++;
       } catch {
         failed++;
       }
     }
-    if (failed > 0) {
-      caido.window.showToast(
-        `Sent ${count} to Replay (${failed} failed)`,
-        { variant: count > 0 ? "success" : "error", duration: 3000 },
-      );
-    } else {
-      caido.window.showToast(`Sent ${count} requests to Replay`, { variant: "success", duration: 2000 });
-    }
+    const suffix = failed > 0 ? ` (${failed} failed)` : "";
+    caido.window.showToast(`Sent ${count} requests to Replay${suffix}.`, {
+      variant: count > 0 ? "success" : "error",
+      duration: 3000,
+    });
   }
 
-  async function copyUrls(targets: RankedResult[]) {
-    const urls = targets.map((r) => r.url).join("\n");
-    try {
-      await navigator.clipboard.writeText(urls);
-      caido.window.showToast(`${targets.length} URLs copied`, { variant: "success", duration: 2000 });
-    } catch {
-      caido.window.showToast("Failed to copy URLs to clipboard", { variant: "error", duration: 3000 });
-    }
+  async function copyUrls(targets: RankedResult[]): Promise<void> {
+    await copyText(
+      targets.map((result) => result.url).join("\n"),
+      `${targets.length} URLs copied.`,
+    );
   }
 
-  function shellQuote(value: string): string {
-    return `'${value.replace(/'/g, `'\\''`)}'`;
-  }
-
-  async function copyCurls(targets: RankedResult[]) {
+  async function copyCurls(targets: RankedResult[]): Promise<void> {
     const curls: string[] = [];
-    for (const r of targets) {
-      const record = await caido.graphql.request({ id: r.id as string });
+    for (const result of targets) {
+      const record = await caido.graphql.request({ id: result.id as string });
       if (!record?.request?.raw) continue;
 
-      const raw = record.request.raw;
-      const lines = raw.split("\r\n");
+      const lines = record.request.raw.split("\r\n");
       const requestLine = lines[0].split(" ");
-      const method = requestLine[0] || "GET";
-      const requestUrl = requestLine[1] || r.url;
       const headerEnd = lines.indexOf("");
-      const headerLines = headerEnd >= 0 ? lines.slice(1, headerEnd) : lines.slice(1);
-      const body = headerEnd >= 0 ? lines.slice(headerEnd + 1).join("\r\n") : "";
-
-      const parts = ["curl", "-X", shellQuote(method)];
-      for (const headerLine of headerLines) {
-        if (headerLine) {
-          parts.push("-H", shellQuote(headerLine));
-        }
+      const headerLines =
+        headerEnd >= 0 ? lines.slice(1, headerEnd) : lines.slice(1);
+      const body =
+        headerEnd >= 0 ? lines.slice(headerEnd + 1).join("\r\n") : "";
+      const parts = [
+        "curl",
+        "-X",
+        shellQuote(requestLine[0] || "GET"),
+      ];
+      for (const header of headerLines) {
+        if (header) parts.push("-H", shellQuote(header));
       }
-      if (body) {
-        parts.push("--data", shellQuote(body));
-      }
-      parts.push(shellQuote(requestUrl));
+      if (body) parts.push("--data", shellQuote(body));
+      parts.push(shellQuote(requestLine[1] || result.url));
       curls.push(parts.join(" "));
     }
+    await copyText(curls.join("\n\n"), `${curls.length} cURL commands copied.`);
+  }
 
+  async function copyFfuf(targets: RankedResult[]): Promise<void> {
+    await copyText(toFfuf(targets), "FFUF command copied.");
+  }
+
+  async function copyText(text: string, success: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(curls.join("\n\n"));
-      caido.window.showToast(`${curls.length} cURL commands copied`, { variant: "success", duration: 2000 });
+      await navigator.clipboard.writeText(text);
+      caido.window.showToast(success, { variant: "success", duration: 2000 });
     } catch {
-      caido.window.showToast("Failed to copy cURL commands to clipboard", { variant: "error", duration: 3000 });
+      caido.window.showToast("Could not copy to the clipboard.", {
+        variant: "error",
+        duration: 3000,
+      });
     }
   }
 
-  function exportCsv(targets: RankedResult[]) {
-    const csv = toCsv(targets);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  function exportCsv(targets: RankedResult[]): void {
+    const blob = new Blob([toCsv(targets)], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `anomaly_results_${new Date().toISOString()}.csv`);
-    link.style.visibility = "hidden";
+    link.href = url;
+    link.download = `anomaly_results_${new Date().toISOString()}.csv`;
+    link.hidden = true;
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    link.remove();
     URL.revokeObjectURL(url);
-    caido.window.showToast(`Exported ${targets.length} results to CSV`, { variant: "success", duration: 2000 });
+    caido.window.showToast(`Exported ${targets.length} responses to CSV.`, {
+      variant: "success",
+      duration: 2000,
+    });
   }
 
-  function updateDashboard(results: RankedResult[]) {
-    currentResults = results;
-    updateCohortBanner(results);
-    table.update(currentResults);
+  function updateDashboard(snapshot: RankingSnapshot): void {
+    updateRate(snapshot.progress);
+    currentSnapshot = snapshot;
+    metrics.hidden = snapshot.progress.status === "idle";
+    toolbar.setStatus(snapshot.progress.status);
+    toolbar.setHasResults(snapshot.results.length > 0);
+    table.update(snapshot.results);
+    tableElement.setAttribute(
+      "aria-busy",
+      String(snapshot.progress.status === "scanning"),
+    );
+    updateProgress(snapshot);
+    if (snapshot.results.length === 0) {
+      if (
+        snapshot.progress.status === "scanning" ||
+        snapshot.progress.status === "cancelling"
+      ) {
+        table.setEmptyMessage(
+          "Checking history… First results will appear momentarily.",
+        );
+      } else if (snapshot.progress.status === "idle") {
+        table.renderEmpty();
+      } else {
+        table.setEmptyMessage(
+          "No responses matched this filter. Try a broader filter.",
+        );
+      }
+    }
+    const count = resultsHeader.querySelector(".anomaly-result-count");
+    if (count) count.textContent = snapshot.results.length.toLocaleString();
   }
 
-  function updateCohortBanner(results: RankedResult[]) {
-    cohortBanner.replaceChildren();
-    const warnings = results[0]?.cohortSummary?.warnings ?? [];
-    if (warnings.length === 0) {
-      cohortBanner.style.display = "none";
+  function updateScanProgress(state: ScanProgress): void {
+    updateRate(state);
+    currentSnapshot = { ...currentSnapshot, progress: state };
+    metrics.hidden = state.status === "idle";
+    toolbar.setStatus(state.status);
+    tableElement.setAttribute(
+      "aria-busy",
+      String(state.status === "scanning"),
+    );
+    updateProgress(currentSnapshot);
+  }
+  function updateProgress(snapshot: RankingSnapshot): void {
+    const { progress: state } = snapshot;
+    progress.hidden = state.status === "idle";
+    progress.dataset.status = state.status;
+    const rail = progress.querySelector<HTMLElement>(".anomaly-progress-rail");
+    const fill = rail?.querySelector<HTMLElement>("span");
+    const percentage =
+      state.totalCount && state.totalCount > 0
+        ? Math.min(100, (state.visitedCount / state.totalCount) * 100)
+        : state.status === "complete" ? 100 : 0;
+    if (fill) fill.style.width = `${percentage}%`;
+    if (rail) {
+      rail.setAttribute("aria-valuenow", String(Math.round(percentage)));
+      rail.setAttribute(
+        "aria-valuetext",
+        `${Math.round(percentage)}% complete`,
+      );
+    }
+    const copy = progress.querySelector(".anomaly-progress-copy");
+    if (!copy) return;
+
+    const rate =
+      requestsPerSecond > 0
+        ? ` · ${Math.round(requestsPerSecond).toLocaleString()} req/s`
+        : "";
+    const messages: Record<ScanStatus, string> = {
+      idle: "",
+      scanning: state.totalCount === undefined
+        ? `Reviewed ${state.visitedCount.toLocaleString()} requests · ${state.scannedCount.toLocaleString()} eligible · ${state.rankedCount.toLocaleString()} ranked${rate}`
+        : `Reviewed ${state.visitedCount.toLocaleString()} of ${state.totalCount.toLocaleString()} matching requests · ${state.scannedCount.toLocaleString()} eligible · ${state.rankedCount.toLocaleString()} ranked${rate}`,
+      cancelling:
+        `Pausing… ${state.rankedCount.toLocaleString()} ranked responses will remain`,
+      complete:
+        `Reviewed ${state.visitedCount.toLocaleString()} requests; ${state.scannedCount.toLocaleString()} were eligible in ${formatDuration(state.elapsedMs)}`,
+      cancelled:
+        `Scan paused after ${state.visitedCount.toLocaleString()} requests. Showing ${state.rankedCount.toLocaleString()} ranked responses.`,
+      failed:
+        `Scan could not finish${state.error ? `: ${state.error}` : "."}`,
+    };
+    copy.textContent = messages[state.status];
+  }
+
+  function updateRate(state: ScanProgress): void {
+    if (state.status !== "scanning") return;
+    const now = performance.now();
+    const elapsed = now - rateSampleTime;
+    const processed = state.visitedCount - rateSampleCount;
+    if (processed < 0) {
+      rateSampleCount = state.visitedCount;
+      rateSampleTime = now;
+      requestsPerSecond = 0;
+      return;
+    }
+    if (elapsed < 250 || processed === 0) return;
+
+    const currentRate = (processed * 1000) / elapsed;
+    requestsPerSecond =
+      requestsPerSecond === 0
+        ? currentRate
+        : requestsPerSecond * 0.65 + currentRate * 0.35;
+    rateSampleCount = state.visitedCount;
+    rateSampleTime = now;
+  }
+
+  function updateMetrics(snapshot: RankingSnapshot): void {
+    const highSignal = snapshot.results.filter((result) => result.rank > 70).length;
+    const statuses = new Map<string, number>();
+    for (const result of snapshot.results) {
+      const group = `${Math.floor(result.statusCode / 100)}xx`;
+      statuses.set(
+        group,
+        (statuses.get(group) ?? 0) + result.occurrences,
+      );
+    }
+
+    setMetric("high-signal", highSignal.toLocaleString());
+    setMetric("changing", snapshot.summary.dynamicFeatureCount.toLocaleString());
+    setStatusMix(statuses);
+  }
+
+  function setMetric(name: string, value: string): void {
+    const node = metrics.querySelector(`[data-metric="${name}"] strong`);
+    if (node) node.textContent = value;
+  }
+
+  function setStatusMix(statuses: Map<string, number>): void {
+    const node = metrics.querySelector<HTMLElement>(
+      '[data-metric="status"] strong',
+    );
+    if (!node) return;
+
+    node.className = "anomaly-status-mix";
+    node.replaceChildren();
+    if (statuses.size === 0) {
+      node.textContent = "No responses";
       return;
     }
 
-    cohortBanner.style.display = "block";
-    const title = document.createElement("strong");
-    title.textContent = "Cohort warning";
-    cohortBanner.appendChild(title);
-
-    const list = document.createElement("ul");
-    for (const warning of warnings) {
-      const item = document.createElement("li");
-      item.textContent = warning;
-      list.appendChild(item);
+    for (const [group, count] of [...statuses.entries()].sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      const item = document.createElement("span");
+      item.className = `anomaly-status-group anomaly-status-${group[0]}`;
+      item.textContent = `${group} ${count.toLocaleString()}`;
+      node.appendChild(item);
     }
-    cohortBanner.appendChild(list);
   }
+
+  function updateComparisonNote(snapshot: RankingSnapshot): void {
+    const warning = snapshot.summary.warnings.join(" ");
+    comparisonNote.hidden = warning.length === 0;
+    comparisonNote.textContent = warning;
+  }
+
+
 
   return {
     element: container,
     onEnter: async () => {
-      toolbar.setValues(scanLimit, scanAll, httpqlFilter);
-      const results = await caido.backend.getResults();
-      updateDashboard(results);
+      toolbar.setFilter(httpqlFilter);
+      const snapshot = await caido.backend.getResults();
+      if (!isRankingSnapshot(snapshot)) {
+        caido.window.showToast(
+          "The plugin backend is out of date. Reinstall the package or restart Caido.",
+          { variant: "error", duration: 5000 },
+        );
+        return;
+      }
+      updateDashboard(snapshot);
     },
     rankRequests: async (ids: string[]) => {
       const seq = ++scanSeq;
-      progressContainer.style.display = "flex";
+      updateDashboard(emptySnapshot("scanning"));
       try {
-        const results = await caido.backend.rankRequests(ids);
-        if (seq !== scanSeq) {
-          return;
-        }
-        updateDashboard(results);
-      } catch (err) {
-        caido.log.error("Failed to rank requests: " + err);
-      } finally {
-        if (seq === scanSeq) {
-          progressContainer.style.display = "none";
-        }
+        const snapshot = await caido.backend.rankRequests(ids);
+        if (seq === scanSeq) updateDashboard(snapshot);
+      } catch (error) {
+        caido.log.error(`Failed to rank requests: ${String(error)}`);
       }
-    }
+    },
   };
 }
 
-function createHeader(): HTMLElement {
-  const header = document.createElement("div");
-  header.className = "anomaly-header";
-  
-  const title = document.createElement("h2");
-  title.textContent = "Anomaly Ranker";
-  title.style.margin = "0";
-  header.appendChild(title);
-
-  return header;
-}
 
 function getStyles(): string {
   return `
-    .anomaly-dashboard,
+    .anomaly-dashboard {
+      --ar-canvas: var(--p-surface-900, #24262d);
+      --ar-surface: var(--p-surface-800, #30333b);
+      --ar-surface-muted: var(--p-surface-700, #474a54);
+      --ar-text: var(--p-text-color, #edeae8);
+      --ar-muted: var(--p-text-muted-color, #929292);
+      --ar-rule: var(--p-content-border-color, #474a54);
+      --ar-focus: var(--p-text-color, #edeae8);
+      --ar-page-padding: 12px;
+      --ar-accent: var(--p-text-color, #edeae8);
+      --ar-accent-hover: var(--p-text-muted-color, #b8b8b8);
+      --ar-accent-contrast: var(--p-surface-900, #24262d);
+      box-sizing: border-box;
+      position: relative;
+      display: flex;
+      height: 100%;
+      min-height: 0;
+      flex-direction: column;
+      gap: 8px;
+      padding: var(--ar-page-padding);
+      overflow: hidden;
+      color: var(--ar-text);
+      background: var(--ar-canvas);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "DejaVu Sans", sans-serif;
+    }
+
+    .anomaly-dashboard *,
+    .anomaly-dashboard *::before,
+    .anomaly-dashboard *::after {
+      box-sizing: border-box;
+    }
+
     .anomaly-dashboard:focus,
-    .anomaly-dashboard:focus-visible,
-    .anomaly-dashboard:focus-within {
+    .anomaly-dashboard:focus-visible {
+      outline: none !important;
+    }
+
+    .anomaly-dashboard :focus-visible {
+      outline: 1px solid var(--ar-focus) !important;
+      outline-offset: 0;
+    }
+
+    .anomaly-header {
+      flex: 0 0 auto;
+    }
+
+
+    .anomaly-header h1,
+    .anomaly-section-header h2 {
+      margin: 2px 0 0;
+      color: var(--ar-text);
+      font-family: "DejaVu Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .anomaly-header h1 {
+      font-size: 20px;
+      line-height: 24px;
+      letter-spacing: -.02em;
+    }
+
+
+    .anomaly-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--ar-rule);
+      border-radius: 6px;
+      background: var(--ar-surface);
+    }
+
+    .anomaly-filter-field {
+      position: relative;
+    }
+
+    .anomaly-filter-suggestions {
+      position: absolute;
+      z-index: 100;
+      top: calc(100% + 4px);
+      left: 0;
+      width: min(520px, 100%);
+      max-height: 240px;
+      padding: 4px;
+      overflow-y: auto;
+      border: 1px solid var(--ar-rule);
+      border-radius: 6px;
+      background: var(--ar-surface);
+      box-shadow: 0 8px 20px rgb(0 0 0 / 24%);
+    }
+
+    .anomaly-filter-suggestions[hidden] {
+      display: none;
+    }
+
+    .anomaly-filter-suggestion {
+      display: block;
+      width: 100%;
+      padding: 7px 8px;
+      overflow: hidden;
+      border: 0;
+      border-radius: 4px;
+      color: var(--ar-text);
+      background: transparent;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .anomaly-filter-suggestion:hover,
+    .anomaly-filter-suggestion.active {
+      background: var(--ar-surface-muted);
+    }
+
+    .anomaly-filter-field label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--ar-text);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .anomaly-filter-field label span {
+      color: var(--ar-muted);
+      font-weight: 400;
+    }
+
+    .httpql-error-message {
+      margin-top: 4px;
+      color: var(--c-border-danger, #f58e97);
+      font-size: 11px;
+    }
+
+
+    .anomaly-scope-toggle {
+      display: inline-flex !important;
+      width: 136px;
+      height: 36px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      margin: 0 !important;
+      padding: 0 10px;
+      border: 1px solid var(--ar-rule);
+      border-radius: 6px;
+      color: var(--ar-text) !important;
+      background: var(--ar-canvas);
+      font-weight: 600 !important;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .anomaly-scope-toggle input {
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      accent-color: var(--ar-accent);
+      cursor: pointer;
+    }
+
+    .anomaly-control {
+      min-height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--ar-rule);
+      border-radius: 6px;
+      color: var(--ar-text);
+      background: var(--ar-canvas);
+      font: inherit;
+    }
+
+    .anomaly-httpql-input-wrap {
+      position: relative;
+      height: 36px;
+    }
+
+    .anomaly-httpql-highlight {
+      position: absolute;
+      z-index: 0;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      margin: 0;
+      padding: 0 10px;
+      overflow: hidden;
+      color: var(--ar-text);
+      background: var(--ar-canvas);
+      font: inherit;
+      white-space: pre;
+      pointer-events: none;
+    }
+
+    .anomaly-httpql-input {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      color: transparent !important;
+      background: transparent !important;
+      caret-color: var(--ar-text);
+      -webkit-text-fill-color: transparent;
+    }
+
+    .anomaly-httpql-input::placeholder {
+      color: var(--ar-muted);
+      -webkit-text-fill-color: var(--ar-muted);
+    }
+
+    .httpql-token-field {
+      color: #8ab4f8;
+    }
+
+    .httpql-token-operator {
+      color: #c6a0f6;
+    }
+
+    .httpql-token-string {
+      color: #9ecb91;
+    }
+
+    .httpql-token-number {
+      color: #f9c97c;
+    }
+
+    .httpql-token-keyword {
+      color: #82d2ce;
+      font-weight: 650;
+    }
+
+    .anomaly-control::placeholder {
+      color: var(--ar-muted);
+      opacity: .75;
+    }
+
+    .anomaly-control:hover {
+      border-color: color-mix(in srgb, var(--ar-rule) 45%, var(--ar-text));
+    }
+
+    .anomaly-control:focus,
+    .anomaly-control:focus-visible {
+      border-color: var(--ar-focus);
       outline: none !important;
       box-shadow: none !important;
     }
-    .anomaly-dashboard *:focus {
-      outline: none !important;
+
+    .anomaly-control:disabled {
+      cursor: not-allowed;
+      opacity: .48;
     }
-    .anomaly-dashboard ::selection {
-      background: var(--background-active, rgba(59, 130, 246, 0.3));
-      color: inherit;
-    }
-    .anomaly-dashboard,
-    .anomaly-dashboard input,
-    .anomaly-dashboard button,
-    .anomaly-dashboard select,
-    .anomaly-dashboard textarea {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-        Arial, sans-serif;
-    }
-    .anomaly-dashboard .caido-table-header [data-field]:hover {
-      background-color: var(--background-hover);
-    }
-    .anomaly-dashboard .caido-table-header .resize-handle {
-      transition: background-color 0.2s;
-    }
-    .anomaly-dashboard .caido-table-header .resize-handle:hover {
-      background-color: var(--color-primary, #3b82f6);
-      opacity: 0.2;
-    }
-    .anomaly-dashboard .caido-table-header .resize-handle::after {
-      content: "";
-      position: absolute;
-      right: 2px;
-      top: 8px;
-      bottom: 8px;
-      width: 2px;
-      background-color: var(--color-primary, #3b82f6);
-      opacity: 0.6;
-      border-radius: 1px;
-    }
-    .anomaly-dashboard .caido-table-header .resize-handle:hover::after {
-      opacity: 1;
-    }
-    .anomaly-dashboard .caido-table-row {
-      cursor: pointer;
-      transition: background-color 0.1s;
-    }
-    .anomaly-dashboard .caido-table-row:focus {
-      outline: none;
-    }
-    .anomaly-dashboard .caido-table-row:hover {
-      background-color: var(--background-hover);
-    }
-    .anomaly-dashboard .caido-table-row.selected {
-      background-color: rgba(59, 130, 246, 0.35) !important;
-      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.6);
-      color: var(--color-foreground);
-    }
-    .anomaly-dashboard .rank-high {
-      font-weight: bold;
-      color: #ef4444;
-    }
-    .anomaly-cohort-banner {
-      padding: 10px 14px;
-      background: rgba(245, 158, 11, 0.15);
-      border: 1px solid rgba(245, 158, 11, 0.5);
-      border-radius: 6px;
-      color: var(--color-foreground);
-      font-size: 13px;
-      flex-shrink: 0;
-    }
-    .anomaly-cohort-banner ul {
-      margin: 6px 0 0 0;
-      padding-left: 20px;
-    }
-    .anomaly-explain-panel {
-      border-top: 1px solid var(--border-color);
-      background: var(--background-overlay);
-      padding: 8px 12px;
-      flex-shrink: 0;
-      max-height: 220px;
-      overflow-y: auto;
-    }
-    .anomaly-explain-toggle {
-      background: none;
-      border: none;
-      color: var(--color-primary, #3b82f6);
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      padding: 0;
-    }
-    .anomaly-explain-toggle:hover {
-      text-decoration: underline;
-    }
-    .anomaly-explain-body {
-      margin-top: 8px;
-      font-size: 12px;
-    }
-    .anomaly-explain-top ol {
-      margin: 4px 0 8px 0;
-      padding-left: 20px;
-    }
-    .anomaly-explain-table {
+
+    .anomaly-filter-field #history-filter {
       width: 100%;
-      border-collapse: collapse;
-      margin-top: 8px;
     }
-    .anomaly-explain-table th,
-    .anomaly-explain-table td {
-      border: 1px solid var(--border-color);
-      padding: 4px 8px;
-      text-align: left;
-    }
-    .anomaly-explain-table th {
-      background: var(--background);
-      font-weight: 600;
-    }
-    .anomaly-explain-cohort {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid var(--border-color);
-    }
-    .anomaly-explain-cohort ul {
-      margin: 4px 0 0 0;
-      padding-left: 20px;
-      color: #f59e0b;
-    }
-    .anomaly-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-shrink: 0;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--border-color);
-    }
-    .anomaly-toolbar {
-      display: flex;
-      align-items: stretch;
-      gap: 16px;
-      padding: 10px 16px;
-      background: var(--background-overlay);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      flex-shrink: 0;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .anomaly-toolbar-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .anomaly-toolbar-controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .anomaly-toolbar-divider {
-      align-self: stretch;
-      width: 1px;
-      background: var(--border-color);
-      margin: 4px 0;
-    }
-    .anomaly-toolbar-label {
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--color-foreground-secondary, #888);
-      white-space: nowrap;
-    }
-    .anomaly-table-container {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      outline: none !important;
-      background: var(--background);
-      font-size: 14px;
-    }
-    .anomaly-table-container:focus-within {
-      outline: none !important;
-    }
-    .anomaly-viewer-container {
-      height: 400px;
-      min-height: 200px;
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      display: none;
-      flex-direction: column;
-      box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
-      position: relative;
-    }
-    .anomaly-viewer-resizer {
-      height: 8px;
-      margin-top: -4px;
-      cursor: row-resize;
-      z-index: 1001;
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      transition: background-color 0.2s;
-    }
-    .anomaly-viewer-resizer:hover {
-      background-color: var(--color-primary, #3b82f6);
-      opacity: 0.5;
-    }
-    .anomaly-viewer-header {
-      padding: 10px;
-      background: var(--background-overlay);
-      border-bottom: 1px solid var(--border-color);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .anomaly-viewer-body {
-      flex: 1;
-      display: flex;
-      width: 100%;
-      overflow: hidden;
-    }
-    .anomaly-viewer-body > div {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-    }
-    .caido-input {
-      background: var(--background);
-      color: var(--color-foreground);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      padding: 6px 12px;
-      font-size: 14px;
-      transition: border-color 0.2s, box-shadow 0.2s;
-      color-scheme: dark light;
-    }
-    .caido-input:hover {
-      border-color: var(--border-color-hover, #555);
-    }
-    .caido-input:focus {
-      border-color: var(--color-primary, #3b82f6);
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-    }
-    .caido-input.invalid {
-      border-color: #ef4444 !important;
-    }
-    .caido-input.invalid:focus {
-      box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2) !important;
-    }
-    .caido-input.valid {
-      border-color: #10b981 !important;
-    }
-    .httpql-error-message {
-      color: #ef4444;
-      font-size: 12px;
-      margin-top: 4px;
-      display: none;
-    }
-    .caido-input::placeholder {
-      color: var(--color-foreground-secondary, #666);
-    }
-    .caido-checkbox-wrapper {
+
+    .anomaly-scan-actions,
+    .anomaly-bulk-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+    }
+
+    .anomaly-section-header .anomaly-bulk-actions {
+      margin-left: auto;
+    }
+
+    .anomaly-button {
+      display: inline-flex;
+      min-height: 36px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      font: inherit;
+      font-weight: 650;
+      white-space: nowrap;
       cursor: pointer;
-      user-select: none;
+      transition: background-color 120ms ease, border-color 120ms ease;
+    }
+
+    .anomaly-button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+    }
+
+    .anomaly-button-primary {
+      width: 96px;
+      border-color: var(--ar-accent);
+      color: var(--ar-accent-contrast);
+      background: var(--ar-accent);
+    }
+
+    .anomaly-button-primary:hover:not(:disabled) {
+      border-color: var(--ar-accent-hover);
+      background: var(--ar-accent-hover);
+    }
+
+    .anomaly-button-pause {
+      border-color: var(--ar-rule);
+      color: var(--ar-text);
+      background: var(--ar-canvas);
+    }
+
+    .anomaly-button-pause:hover:not(:disabled) {
+      background: var(--ar-surface-muted);
+    }
+
+    .anomaly-select {
+      min-width: 128px;
+      cursor: pointer;
+    }
+
+    .anomaly-visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .anomaly-progress {
+      display: grid;
+      flex: 0 0 auto;
+      grid-template-columns: minmax(90px, 140px) 1fr;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
       padding: 4px 8px;
-      border-radius: 4px;
-      transition: background-color 0.2s;
-      font-size: 14px;
+      border: 1px solid var(--ar-rule);
+      border-radius: 5px;
+      color: var(--ar-muted);
+      background: color-mix(in srgb, var(--ar-surface) 72%, transparent);
+      font-size: 11px;
     }
-    .caido-checkbox-wrapper:hover {
-      background-color: var(--background-hover);
-    }
-    .caido-checkbox-wrapper input {
-      cursor: pointer;
-      width: 14px;
-      height: 14px;
-    }
-    .caido-checkbox-wrapper label {
-      cursor: pointer;
-      font-size: 14px;
-      white-space: nowrap;
-    }
-    .custom-dropdown {
-      position: relative;
-      display: inline-block;
-    }
-    .custom-dropdown-trigger {
-      background: var(--background);
-      color: var(--color-foreground);
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      padding: 6px 32px 6px 12px;
-      cursor: pointer;
-      min-width: 120px;
-      font-size: 14px;
-      position: relative;
-      transition: border-color 0.2s;
-    }
-    .custom-dropdown-trigger:hover {
-      border-color: var(--color-primary, #3b82f6);
-    }
-    .custom-dropdown-trigger::after {
-      content: "▼";
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      pointer-events: none;
-      font-size: 10px;
-    }
-    .custom-dropdown-menu {
-      position: absolute;
-      top: 100%;
-      left: 0;
-      background: #1e1e1e;
-      color: #e0e0e0;
-      border: 1px solid #3a3a3a;
-      border-radius: 4px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-      z-index: 1000;
+
+    .anomaly-progress[hidden],
+    .anomaly-metrics[hidden],
+    .anomaly-comparison-note[hidden] {
       display: none;
-      min-width: 100%;
-      margin-top: 4px;
     }
-    .custom-dropdown-menu.open {
+
+    .anomaly-progress-rail {
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--ar-rule);
+    }
+
+    .anomaly-progress-rail span {
       display: block;
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--ar-accent);
+      transition: width 160ms linear;
     }
-    .custom-dropdown-item {
-      padding: 8px 12px;
-      cursor: pointer;
+
+    .anomaly-metrics {
+      display: grid;
+      flex: 0 0 auto;
+      grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) minmax(240px, 3fr);
+      overflow: hidden;
+      border: 1px solid var(--ar-rule);
+      border-radius: 8px;
+      background: var(--ar-surface);
+    }
+
+    .anomaly-metric {
+      min-width: 0;
+      padding: 6px 10px;
+      border-right: 1px solid var(--ar-rule);
+    }
+
+    .anomaly-metric:last-child {
+      border-right: 0;
+    }
+
+    .anomaly-metric span {
+      display: block;
+      color: var(--ar-muted);
+      font-size: 11px;
+    }
+    .anomaly-metric strong {
+      display: block;
+      margin-top: 1px;
+      overflow: hidden;
+      color: var(--ar-text);
+      font: 700 14px/18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 14px;
-      color: #e0e0e0;
-      transition: background-color 0.1s, color 0.1s;
     }
-    .custom-dropdown-item:hover {
-      background: #2a2a2a;
-      color: #ffffff;
+
+    .anomaly-status-mix {
+      display: flex !important;
+      align-items: center;
+      gap: 12px;
     }
-    .custom-dropdown-item.disabled {
-      color: #666666;
-      cursor: default;
+
+    .anomaly-status-group {
+      display: inline-flex !important;
     }
-    .custom-dropdown-item.disabled:hover {
+
+    .anomaly-status-1 {
+      color: #60a5fa !important;
+    }
+
+    .anomaly-status-2 {
+      color: #4ade80 !important;
+    }
+
+    .anomaly-status-3 {
+      color: #facc15 !important;
+    }
+
+    .anomaly-status-4 {
+      color: #fb923c !important;
+    }
+
+    .anomaly-status-5 {
+      color: #f87171 !important;
+    }
+
+    .anomaly-comparison-note {
+      flex: 0 0 auto;
+      padding: 6px 10px;
+      border: 1px solid var(--ar-rule);
+      border-radius: 5px;
+      color: var(--ar-muted);
+      background: color-mix(in srgb, var(--ar-surface) 76%, transparent);
+      font-size: 11px;
+    }
+
+    .anomaly-results {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 180px;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .anomaly-dashboard.viewer-open .anomaly-metrics,
+    .anomaly-dashboard.viewer-open .anomaly-comparison-note {
+      display: none;
+    }
+
+    .anomaly-dashboard.viewer-open .anomaly-results {
+      min-height: 80px;
+    }
+
+    .anomaly-section-header {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: end;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 2px 6px;
+    }
+
+    .anomaly-section-header h2 {
+      font-size: 15px;
+      line-height: 20px;
+      letter-spacing: -.01em;
+    }
+
+    .anomaly-result-count {
+      margin-left: 5px;
+      color: var(--ar-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .anomaly-table-empty-notice {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 120px;
+      padding: 20px 12px;
+      color: var(--ar-muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .anomaly-table-container {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--ar-rule);
+      border-radius: 8px;
+      background: var(--ar-surface);
+    }
+
+    .caido-table-header {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--ar-rule);
+      color: var(--ar-muted);
+      background: var(--ar-surface) !important;
+      font-size: 13px;
+    }
+
+    .caido-table-row {
+      color: var(--ar-text);
+      background: var(--ar-canvas) !important;
+      font: 12px/16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .caido-table-row:hover {
+      background: color-mix(in srgb, var(--ar-surface-muted) 34%, var(--ar-canvas)) !important;
+    }
+
+    .caido-table-row.selected {
+      background: color-mix(in srgb, var(--ar-accent) 14%, var(--ar-canvas)) !important;
+    }
+
+    .rank-high {
+      color: var(--ar-text);
+      font-weight: 750;
+    }
+
+    .anomaly-column-sort {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 0;
+      color: inherit;
       background: transparent;
-      color: #666666;
+      font: inherit;
+      font-weight: 650;
+      text-align: left;
+      cursor: pointer;
     }
-    .custom-dropdown-divider {
-      border-top: 1px solid #3a3a3a;
-      margin: 4px 0;
+
+    .resize-handle {
+      position: absolute;
+      z-index: 1;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 6px;
+      cursor: col-resize;
+    }
+
+
+
+    .anomaly-status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      margin-right: 6px;
+      border-radius: 50%;
+    }
+
+    .anomaly-viewer-container {
+      position: absolute;
+      z-index: 20;
+      right: var(--ar-page-padding);
+      bottom: 0;
+      left: var(--ar-page-padding);
+      display: none;
+      max-height: calc(100% - 24px);
+      min-height: 200px;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--ar-rule);
+      border-radius: 8px 8px 0 0;
+      background: var(--ar-surface);
+    }
+
+    .anomaly-viewer-resizer {
+      position: absolute;
+      z-index: 5;
+      top: 0;
+      right: 0;
+      left: 0;
+      height: 10px;
+      cursor: row-resize;
+      touch-action: none;
+    }
+
+    .anomaly-viewer-resizer::after {
+      position: absolute;
+      top: 2px;
+      left: 50%;
+      width: 48px;
+      height: 2px;
+      border-radius: 999px;
+      background: var(--ar-rule);
+      content: "";
+      transform: translateX(-50%);
+    }
+
+    .anomaly-viewer-resizer:hover::after,
+    .anomaly-viewer-resizer:focus-visible::after {
+      background: var(--ar-text);
+    }
+
+    .anomaly-viewer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 44px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--ar-rule);
+      font-weight: 650;
+    }
+
+    .anomaly-viewer-close {
+      min-width: 32px;
+      min-height: 32px;
+      border: 0;
+      border-radius: 4px;
+      color: var(--ar-text);
+      background: transparent;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .anomaly-viewer-close:hover {
+      background: var(--ar-surface-muted);
+    }
+
+    .anomaly-viewer-body {
+      display: flex;
+      min-height: 0;
+      flex: 1;
+      gap: 1px;
+      background: var(--ar-rule);
+      overflow: hidden;
+    }
+
+    .anomaly-viewer-body > div {
+      width: 50%;
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      background: var(--ar-surface);
+    }
+
+    .anomaly-viewer-body caido-sdk-editor-http-request,
+    .anomaly-viewer-body caido-sdk-editor-http-response {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .anomaly-viewer-error {
+      padding: 10px 14px;
+      border-top: 1px solid var(--ar-rule);
+      color: var(--c-border-danger, #f58e97);
+    }
+
+
+
+    @media (max-width: 980px) {
+      .anomaly-toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .anomaly-filter-field,
+      .anomaly-scan-actions {
+        grid-column: 1;
+      }
+
+      .anomaly-scan-actions {
+        padding-top: 8px;
+      }
+
+      .anomaly-metrics {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+    }
+
+    @media (max-width: 680px) {
+      .anomaly-dashboard {
+        --ar-page-padding: 8px;
+        gap: 8px;
+        padding: var(--ar-page-padding);
+      }
+
+      .anomaly-header h1 {
+        font-size: 19px;
+      }
+
+      .anomaly-toolbar {
+        padding: 8px;
+      }
+
+      .anomaly-scan-actions,
+      .anomaly-bulk-actions {
+        flex-wrap: wrap;
+      }
+
+      .anomaly-progress {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .anomaly-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+
+      .anomaly-section-header {
+        align-items: start;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .anomaly-viewer-body {
+        flex-direction: column;
+      }
+
+      .anomaly-viewer-body > div {
+        width: 100%;
+        min-height: 180px;
+      }
+
+      .anomaly-viewer-container {
+        right: var(--ar-page-padding);
+        bottom: 0;
+        left: var(--ar-page-padding);
+        max-height: calc(100% - 12px);
+      }
+    }
+
+
+    @media (max-width: 480px) {
+      .anomaly-scan-actions,
+      .anomaly-bulk-actions {
+        flex-wrap: nowrap;
+      }
+
+      .anomaly-select {
+        min-width: 96px;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .anomaly-progress-rail span {
+        transition: none;
+      }
+      .anomaly-button {
+        transition: none;
+      }
     }
   `;
+}
+
+function emptySnapshot(status: ScanStatus = "idle"): RankingSnapshot {
+  return {
+    results: [],
+    summary: { size: 0, dynamicFeatureCount: 0, warnings: [] },
+    progress: {
+      status,
+      scannedCount: 0,
+      visitedCount: 0,
+      rankedCount: 0,
+      elapsedMs: 0,
+    },
+  };
+}
+
+function metricMarkup(name: string, label: string): string {
+  return `
+    <div class="anomaly-metric" data-metric="${name}">
+      <span>${label}</span>
+      <strong>0</strong>
+    </div>
+  `;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  return `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+
+function isRankingSnapshot(value: unknown): value is RankingSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<RankingSnapshot>;
+  return (
+    Array.isArray(candidate.results) &&
+    typeof candidate.summary === "object" &&
+    candidate.summary !== null &&
+    typeof candidate.progress === "object" &&
+    candidate.progress !== null
+  );
 }

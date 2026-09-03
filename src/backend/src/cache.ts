@@ -1,22 +1,17 @@
-import { RankedResult } from "../../shared/types.js";
 
-/**
- * Simple LRU cache for ranking results.
- */
-export class ResultsCache {
-  private cache = new Map<string, RankedResult[]>();
+export class ResultsCache<T> {
+  private cache = new Map<string, T>();
   private readonly maxSize: number;
 
   constructor(maxSize = 500) {
     this.maxSize = maxSize;
   }
 
-  public get(key: string): RankedResult[] | undefined {
+  public get(key: string): T | undefined {
     return this.cache.get(key);
   }
 
-  public set(key: string, results: RankedResult[]): void {
-    // Evict oldest entry if at capacity
+  public set(key: string, results: T): void {
     if (this.cache.size >= this.maxSize) {
       const firstKey = this.cache.keys().next().value;
       if (firstKey !== undefined) {

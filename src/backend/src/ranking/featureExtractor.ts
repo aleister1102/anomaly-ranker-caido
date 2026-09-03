@@ -1,12 +1,19 @@
 import { crc32, crc32Chars } from "../features/crc32.js";
 import { extractHtmlFeatures } from "../features/htmlFeatures.js";
+import { parseMimeType } from "../mime.js";
 import type { FeatureName } from "./types.js";
 
 export interface ExtractFeaturesInput {
   statusCode: number;
   bodyBytes: Uint8Array;
   contentLengthHeader?: string;
+  contentType?: string;
   rawResponseBytes?: Uint8Array;
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  const mime = parseMimeType(contentType);
+  return mime === "text/html" || mime === "application/xhtml+xml";
 }
 
 function bytesToLatin1(bytes: Uint8Array, start: number, end: number): string {
@@ -17,46 +24,50 @@ function bytesToLatin1(bytes: Uint8Array, start: number, end: number): string {
   return s;
 }
 
-export function splitRawResponseLines(rawResponseBytes: Uint8Array): string[] {
-  const lines: string[] = [];
-  let start = 0;
 
-  for (let i = 0; i < rawResponseBytes.length; i++) {
-    if (rawResponseBytes[i] !== 0x0a) {
-      continue;
+function findBodyStart(bytes: Uint8Array): number {
+  const len = bytes.length;
+  for (let i = 0; i < len - 1; i++) {
+    if (bytes[i] === 0x0a) {
+      if (i + 1 < len && bytes[i + 1] === 0x0a) return i + 2;
+      if (i + 2 < len && bytes[i + 1] === 0x0d && bytes[i + 2] === 0x0a) return i + 3;
     }
-
-    let end = i;
-    if (end > start && rawResponseBytes[end - 1] === 0x0d) {
-      end--;
-    }
-    lines.push(bytesToLatin1(rawResponseBytes, start, end));
-    start = i + 1;
   }
-
-  if (start < rawResponseBytes.length) {
-    let end = rawResponseBytes.length;
-    if (end > start && rawResponseBytes[end - 1] === 0x0d) {
-      end--;
-    }
-    lines.push(bytesToLatin1(rawResponseBytes, start, end));
-  }
-
-  return lines;
+  return len;
 }
 
 export function extractHeaderNames(rawResponseBytes: Uint8Array): number {
   let names = "";
-  for (const line of splitRawResponseLines(rawResponseBytes)) {
-    if (line === "") {
+  const len = rawResponseBytes.length;
+  let lineStart = 0;
+
+  for (let i = 0; i < len; i++) {
+    if (rawResponseBytes[i] !== 0x0a) continue;
+
+    let lineEnd = i;
+    if (lineEnd > lineStart && rawResponseBytes[lineEnd - 1] === 0x0d) {
+      lineEnd--;
+    }
+
+    if (lineEnd === lineStart) {
       break;
     }
-    const colonIdx = line.indexOf(":");
-    if (colonIdx === -1) {
-      continue;
+
+    let colonIdx = -1;
+    for (let j = lineStart; j < lineEnd; j++) {
+      if (rawResponseBytes[j] === 0x3a) {
+        colonIdx = j;
+        break;
+      }
     }
-    names += line.substring(0, colonIdx);
+
+    if (colonIdx !== -1) {
+      names += bytesToLatin1(rawResponseBytes, lineStart, colonIdx);
+    }
+
+    lineStart = i + 1;
   }
+
   return crc32Chars(names);
 }
 
@@ -85,51 +96,55 @@ export function extractContentLength(
   return bodyBytes.length;
 }
 
-export function extractWordCount(bodyBytes: Uint8Array): number {
-  let count = 0;
+
+export function extractFeatures(
+  input: ExtractFeaturesInput,
+): Record<FeatureName, number> {
+  const {
+    statusCode,
+    bodyBytes,
+    contentLengthHeader,
+    contentType,
+    rawResponseBytes,
+  } = input;
+  const raw = rawResponseBytes ?? new Uint8Array();
+  let body = bodyBytes;
+  if (body.length === 0 && raw.length > 0) {
+    body = raw.subarray(findBodyStart(raw));
+  }
+  const len = body.length;
+  let wordCount = 0;
+  let lineCount = 0;
   let inWord = false;
-  for (let i = 0; i < bodyBytes.length; i++) {
-    if (bodyBytes[i] > 32) {
+
+  for (let i = 0; i < len; i++) {
+    const b = body[i];
+    if (b === 0x0a) {
+      lineCount++;
+    }
+    if (b > 32) {
       if (!inWord) {
-        count++;
+        wordCount++;
         inWord = true;
       }
     } else {
       inWord = false;
     }
   }
-  return count;
-}
+  if (len > 0 && body[len - 1] !== 0x0a) {
+    lineCount++;
+  }
 
-export function extractLineCount(bodyBytes: Uint8Array): number {
-  if (bodyBytes.length === 0) {
-    return 0;
-  }
-  let count = 0;
-  for (let i = 0; i < bodyBytes.length; i++) {
-    if (bodyBytes[i] === 0x0a) {
-      count++;
-    }
-  }
-  const lastByte = bodyBytes[bodyBytes.length - 1];
-  if (lastByte !== 0x0a) {
-    count++;
-  }
-  return count;
-}
-
-export function extractFeatures(
-  input: ExtractFeaturesInput,
-): Record<FeatureName, number> {
-  const { statusCode, bodyBytes, contentLengthHeader, rawResponseBytes } = input;
-  const raw = rawResponseBytes ?? new Uint8Array();
-  const html = extractHtmlFeatures(bodyBytes);
+  const html =
+    contentType === undefined || isHtmlContentType(contentType)
+      ? extractHtmlFeatures(body)
+      : { hasMarkup: false, visibleText: 0, visibleWordCount: 0, tagNames: 0 };
   return {
     statusCode,
-    contentLength: extractContentLength(bodyBytes, contentLengthHeader),
-    bodyContent: crc32(bodyBytes),
-    wordCount: extractWordCount(bodyBytes),
-    lineCount: extractLineCount(bodyBytes),
+    contentLength: extractContentLength(body, contentLengthHeader),
+    bodyContent: crc32(body),
+    wordCount,
+    lineCount,
     headerNames: extractHeaderNames(raw),
     colonCount: extractColonCount(raw),
     visibleText: html.visibleText,

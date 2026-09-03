@@ -1,283 +1,201 @@
 import type { Caido } from "@caido/sdk-frontend";
-import type { FeatureContribution, RankedResult } from "../../../shared/types.js";
+import type {
+  BackendEndpoints,
+  RankedResult,
+} from "../../../shared/types.js";
 
-const FEATURE_LABELS: Record<string, string> = {
-  statusCode: "Status Code",
-  contentLength: "Content Length",
-  bodyContent: "Body Content",
-  wordCount: "Word Count",
-  lineCount: "Line Count",
-  headerNames: "Header Names",
-  colonCount: "Colon Count",
-  visibleText: "Visible Text",
-  visibleWordCount: "Visible Word Count",
-  tagNames: "Tag Names",
-};
 
 export class RequestViewer {
-  private container: HTMLElement;
-  private caido: Caido<any>;
-  private requestEditor: any;
-  private responseEditor: any;
-  private viewerHeight = 400;
-  private resizer: HTMLElement;
-  private explainPanel: HTMLElement | null = null;
+  private readonly container: HTMLElement;
+  private readonly caido: Caido<BackendEndpoints>;
+  private readonly requestEditor: ReturnType<Caido<BackendEndpoints>["ui"]["httpRequestEditor"]>;
+  private readonly responseEditor: ReturnType<Caido<BackendEndpoints>["ui"]["httpResponseEditor"]>;
+  private readonly resizer: HTMLElement;
+  private readonly onVisibilityChange: (visible: boolean) => void;
+  private viewerHeight = 320;
+  private showSequence = 0;
 
-  constructor(caido: Caido<any>) {
+  constructor(
+    caido: Caido<BackendEndpoints>,
+    onVisibilityChange: (visible: boolean) => void = () => {},
+  ) {
     this.caido = caido;
-    this.container = document.createElement("div");
+    this.onVisibilityChange = onVisibilityChange;
+    this.container = document.createElement("section");
     this.container.className = "anomaly-viewer-container";
     this.container.style.height = `${this.viewerHeight}px`;
 
     this.resizer = document.createElement("div");
     this.resizer.className = "anomaly-viewer-resizer";
+    this.resizer.tabIndex = 0;
+    this.resizer.setAttribute("role", "separator");
+    this.resizer.setAttribute("aria-label", "Resize request details");
+    this.resizer.setAttribute("aria-orientation", "horizontal");
     this.container.appendChild(this.resizer);
-
     this.setupResizer();
 
     this.requestEditor = caido.ui.httpRequestEditor();
     this.responseEditor = caido.ui.httpResponseEditor();
   }
 
-  private setupResizer() {
-    let isResizing = false;
-    let startY: number;
-    let startHeight: number;
-
-    this.resizer.addEventListener("mousedown", (e) => {
-      isResizing = true;
-      startY = e.clientY;
-      startHeight = this.container.offsetHeight;
-      document.body.style.cursor = "row-resize";
-      document.body.style.userSelect = "none";
-    });
-
-    window.addEventListener("mousemove", (e) => {
-      if (!isResizing) return;
-
-      const deltaY = e.clientY - startY;
-      let newHeight = startHeight - deltaY;
-
-      if (newHeight < 200) newHeight = 200;
-
-      const dashboard = this.container.parentElement;
-      const table = dashboard?.querySelector(".anomaly-table-container") as HTMLElement;
-      if (table && dashboard) {
-        const dashboardHeight = dashboard.offsetHeight;
-        const otherElementsHeight = dashboardHeight - table.offsetHeight - this.container.offsetHeight;
-        const maxViewerHeight = dashboardHeight - otherElementsHeight - 100;
-        if (newHeight > maxViewerHeight) newHeight = maxViewerHeight;
-      }
-
-      this.viewerHeight = newHeight;
-      this.container.style.height = `${newHeight}px`;
-    });
-
-    window.addEventListener("mouseup", () => {
-      if (isResizing) {
-        isResizing = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    });
-  }
-
   public getElement(): HTMLElement {
     return this.container;
   }
 
-  public async show(id: string, ranked?: RankedResult) {
+  public async show(
+    id: string,
+    ranked?: RankedResult,
+  ): Promise<void> {
+    const sequence = ++this.showSequence;
     this.container.style.display = "flex";
-    this.container.style.height = `${this.viewerHeight}px`;
-    
-    Array.from(this.container.childNodes).forEach(node => {
-      if (node !== this.resizer) this.container.removeChild(node);
-    });
-
-    const viewerHeader = document.createElement("div");
-    viewerHeader.className = "anomaly-viewer-header";
-    const idLabel = document.createElement("span");
-    idLabel.textContent = `Request ID: ${id}`;
-    viewerHeader.appendChild(idLabel);
-    
-    const closeBtn = document.createElement("button");
-    closeBtn.innerHTML = "&times;";
-    closeBtn.style.cssText = "background: none; border: none; font-size: 20px; cursor: pointer; color: var(--color-foreground);";
-    closeBtn.addEventListener("click", () => this.hide());
-    viewerHeader.appendChild(closeBtn);
-    
-    const viewerBody = document.createElement("div");
-    viewerBody.className = "anomaly-viewer-body";
-    
-    const wrapperStyle = "flex: 1; width: 50%; min-width: 0; overflow: hidden;";
-    const requestWrapper = document.createElement("div");
-    requestWrapper.style.cssText = wrapperStyle;
-    requestWrapper.appendChild(this.requestEditor.getElement());
-
-    const responseWrapper = document.createElement("div");
-    responseWrapper.style.cssText = wrapperStyle;
-    responseWrapper.appendChild(this.responseEditor.getElement());
-
-    viewerBody.appendChild(requestWrapper);
-    viewerBody.appendChild(responseWrapper);
-    
-    this.container.appendChild(viewerHeader);
-    this.container.appendChild(viewerBody);
-
-    if (ranked) {
-      this.explainPanel = this.buildExplainPanel(ranked);
-      this.container.appendChild(this.explainPanel);
-    } else {
-      this.explainPanel = null;
+    this.onVisibilityChange(true);
+    this.setHeight(this.viewerHeight);
+    this.container.setAttribute("aria-label", `Request ${id} details`);
+    for (const node of Array.from(this.container.childNodes)) {
+      if (node !== this.resizer) node.remove();
     }
 
-    const record = await this.caido.graphql.request({ id });
-    if (record?.request?.raw) {
-      this.setEditorRaw(this.requestEditor, record.request.raw);
-    }
-
-    if (record?.request?.response?.id) {
-      const respRecord = await this.caido.graphql.response({ id: record.request.response.id });
-      if (respRecord?.response?.raw) {
-        this.setEditorRaw(this.responseEditor, respRecord.response.raw);
-      }
-    } else {
-      this.setEditorRaw(this.responseEditor, "");
-    }
-  }
-
-  private buildExplainPanel(ranked: RankedResult): HTMLElement {
-    const panel = document.createElement("div");
-    panel.className = "anomaly-explain-panel";
-
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "anomaly-explain-toggle";
-    toggle.textContent = "Why anomalous?";
-    toggle.setAttribute("aria-expanded", "false");
+    const header = document.createElement("div");
+    header.className = "anomaly-viewer-header";
+    const title = document.createElement("span");
+    title.textContent = ranked
+      ? `Request ${id} · Score ${ranked.rank}`
+      : `Request ${id}`;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "anomaly-viewer-close";
+    close.setAttribute("aria-label", "Close request details");
+    close.textContent = "×";
+    close.addEventListener("click", () => this.hide());
+    header.append(title, close);
 
     const body = document.createElement("div");
-    body.className = "anomaly-explain-body";
-    body.style.display = "none";
+    body.className = "anomaly-viewer-body";
+    const requestWrapper = document.createElement("div");
+    const responseWrapper = document.createElement("div");
+    requestWrapper.appendChild(this.requestEditor.getElement());
+    responseWrapper.appendChild(this.responseEditor.getElement());
+    body.append(requestWrapper, responseWrapper);
+    this.container.append(header, body);
+    const recordPromise = this.caido.graphql.request({ id });
 
-    toggle.addEventListener("click", () => {
-      const open = body.style.display === "none";
-      body.style.display = open ? "block" : "none";
-      toggle.setAttribute("aria-expanded", String(open));
-    });
+    try {
+      await Promise.all([
+        this.setEditorRaw(this.requestEditor, "", sequence),
+        this.setEditorRaw(this.responseEditor, "", sequence),
+      ]);
+      const record = await recordPromise;
+      if (sequence !== this.showSequence) return;
+      await this.setEditorRaw(
+        this.requestEditor,
+        record?.request?.raw ?? "",
+        sequence,
+      );
 
-    const contributions = ranked.contributions ?? [];
-    const top3 = contributions.slice(0, 3);
-
-    if (top3.length > 0) {
-      const topSection = document.createElement("div");
-      topSection.className = "anomaly-explain-top";
-      const topTitle = document.createElement("strong");
-      topTitle.textContent = "Top contributors";
-      topSection.appendChild(topTitle);
-
-      const topList = document.createElement("ol");
-      for (const c of top3) {
-        const li = document.createElement("li");
-        li.textContent = `${this.formatFeature(c)} (contribution ${c.contribution.toFixed(4)})`;
-        topList.appendChild(li);
+      if (record?.request?.response?.id) {
+        const response = await this.caido.graphql.response({
+          id: record.request.response.id,
+        });
+        if (sequence !== this.showSequence) return;
+        await this.setEditorRaw(
+          this.responseEditor,
+          response?.response?.raw ?? "",
+          sequence,
+        );
+      } else {
+        await this.setEditorRaw(
+          this.responseEditor,
+          "No response was captured for this request.",
+          sequence,
+        );
       }
-      topSection.appendChild(topList);
-      body.appendChild(topSection);
-    } else {
-      const none = document.createElement("p");
-      none.textContent = "No dynamic features contributed to this rank (cohort may be uniform).";
-      body.appendChild(none);
+
+    } catch (error) {
+      if (sequence !== this.showSequence) return;
+      this.caido.log.error(
+        `Could not load request ${id} details: ${String(error)}`,
+      );
+      const errorMessage = document.createElement("div");
+      errorMessage.className = "anomaly-viewer-error";
+      errorMessage.textContent =
+        "Request details could not be loaded. Select the row again or run the scan again.";
+      this.container.appendChild(errorMessage);
     }
-
-    if (contributions.length > 0) {
-      const table = document.createElement("table");
-      table.className = "anomaly-explain-table";
-
-      const thead = document.createElement("thead");
-      const headerRow = document.createElement("tr");
-      for (const label of ["Feature", "Value", "Frequency", "Distinct", "Weight", "Contribution"]) {
-        const th = document.createElement("th");
-        th.textContent = label;
-        headerRow.appendChild(th);
-      }
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
-
-      const tbody = document.createElement("tbody");
-      for (const c of contributions) {
-        tbody.appendChild(this.buildContributionRow(c));
-      }
-      table.appendChild(tbody);
-      body.appendChild(table);
-    }
-
-    if (ranked.cohortSummary) {
-      const cohort = document.createElement("div");
-      cohort.className = "anomaly-explain-cohort";
-      const cohortTitle = document.createElement("strong");
-      cohortTitle.textContent = "Cohort summary";
-      cohort.appendChild(cohortTitle);
-
-      const cohortText = document.createElement("p");
-      cohortText.textContent =
-        `${ranked.cohortSummary.size} responses, ${ranked.cohortSummary.dynamicFeatureCount} varying features.`;
-      cohort.appendChild(cohortText);
-
-      if (ranked.cohortSummary.warnings.length > 0) {
-        const warnList = document.createElement("ul");
-        for (const w of ranked.cohortSummary.warnings) {
-          const li = document.createElement("li");
-          li.textContent = w;
-          warnList.appendChild(li);
-        }
-        cohort.appendChild(warnList);
-      }
-
-      body.appendChild(cohort);
-    }
-
-    panel.appendChild(toggle);
-    panel.appendChild(body);
-    return panel;
   }
 
-  private formatFeature(c: FeatureContribution): string {
-    return FEATURE_LABELS[c.feature] ?? c.feature;
-  }
-
-  private buildContributionRow(c: FeatureContribution): HTMLTableRowElement {
-    const row = document.createElement("tr");
-    const cells = [
-      this.formatFeature(c),
-      String(c.value),
-      String(c.frequency),
-      String(c.distinctValues),
-      c.weight.toFixed(4),
-      c.contribution.toFixed(4),
-    ];
-    for (const text of cells) {
-      const td = document.createElement("td");
-      td.textContent = text;
-      row.appendChild(td);
-    }
-    return row;
-  }
-
-  public hide() {
+  public hide(): void {
+    this.showSequence++;
     this.container.style.display = "none";
+    this.onVisibilityChange(false);
   }
 
-  private setEditorRaw(editor: any, raw: string | null | undefined) {
-    const view = editor.getEditorView();
-    if (view) {
-      view.dispatch({
-        changes: {
-          from: 0,
-          to: view.state.doc.length,
-          insert: raw || ""
+  private setupResizer(): void {
+    let startY = 0;
+    let startHeight = 0;
+
+    const finishResize = (event: PointerEvent) => {
+      if (!this.resizer.hasPointerCapture(event.pointerId)) return;
+      this.resizer.releasePointerCapture(event.pointerId);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    this.resizer.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      startY = event.clientY;
+      startHeight = this.container.offsetHeight;
+      this.resizer.setPointerCapture(event.pointerId);
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+    });
+    this.resizer.addEventListener("pointermove", (event) => {
+      if (!this.resizer.hasPointerCapture(event.pointerId)) return;
+      this.setHeight(startHeight - (event.clientY - startY));
+    });
+    this.resizer.addEventListener("pointerup", finishResize);
+    this.resizer.addEventListener("pointercancel", finishResize);
+    this.resizer.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      this.setHeight(
+        this.viewerHeight + (event.key === "ArrowUp" ? 24 : -24),
+      );
+    });
+  }
+
+  private setHeight(height: number): void {
+    const dashboardHeight = this.container.parentElement?.clientHeight ?? 800;
+    const maxHeight = Math.max(320, dashboardHeight - 48);
+    this.viewerHeight = Math.min(Math.max(height, 240), maxHeight);
+    this.container.style.height = `${this.viewerHeight}px`;
+  }
+
+
+  private async setEditorRaw(
+    editor: typeof this.requestEditor | typeof this.responseEditor,
+    raw: string,
+    sequence: number,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (sequence !== this.showSequence) return;
+      try {
+        const view = editor.getEditorView();
+        if (view) {
+          view.dispatch({
+            changes: {
+              from: 0,
+              to: view.state.doc.length,
+              insert: raw,
+            },
+          });
+          return;
         }
-      });
+      } catch {
+        // The editor can be unavailable for a frame while Caido mounts it.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 16));
     }
+    throw new Error("Caido editor did not become ready");
   }
 }

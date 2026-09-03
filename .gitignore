@@ -3,3 +3,9 @@ dist/
 *.pem
 *.sig
 .DS_Store
+.agents/
+.claude/
+.commandcode/
+.omp/
+.pi/
+skills-lock.json

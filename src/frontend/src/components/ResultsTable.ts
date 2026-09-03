@@ -1,5 +1,5 @@
 import type { RankedResult } from "../../../shared/types.js";
-import { getRowColor, getRowBackgroundColor } from "../utils/colors.js";
+import { getStatusColor } from "../utils/colors.js";
 
 const ROW_HEIGHT = 41;
 const BUFFER_ROWS = 10;
@@ -9,11 +9,11 @@ interface ColumnConfig {
   label: string;
   width: number;
   minWidth: number;
-  flex?: boolean;
 }
 
 export class ResultsTable {
   private container: HTMLElement;
+  private headerWrap: HTMLElement;
   private scrollContainer: HTMLElement;
   private tableWrapper: HTMLElement;
   private tbody: HTMLElement | null = null;
@@ -28,98 +28,106 @@ export class ResultsTable {
   private visibleEnd = 0;
   private scrollHandler: (() => void) | null = null;
   
-  // Column configuration with resizable widths
+  private emptyMessage = "No scan yet. Choose your filter and select Start.";
+
   private columns: ColumnConfig[] = [
-    { field: "id", label: "ID", width: 240, minWidth: 140 },
-    { field: "rank", label: "Rank", width: 60, minWidth: 40 },
-    { field: "rawRank", label: "Raw", width: 70, minWidth: 50 },
-    { field: "method", label: "Method", width: 70, minWidth: 50 },
-    { field: "statusCode", label: "Status", width: 60, minWidth: 50 },
-    { field: "contentLength", label: "Length", width: 80, minWidth: 50 },
-    { field: "contentType", label: "Type", width: 120, minWidth: 60 },
-    { field: "location", label: "Location", width: 200, minWidth: 80 },
-    { field: "url", label: "URL", width: 400, minWidth: 100 },
+    { field: "id", label: "Request", width: 180, minWidth: 120 },
+    { field: "rank", label: "Score", width: 70, minWidth: 55 },
+    { field: "occurrences", label: "Count", width: 70, minWidth: 55 },
+    { field: "rawRank", label: "Base score", width: 90, minWidth: 70 },
+    { field: "method", label: "Method", width: 70, minWidth: 55 },
+    { field: "statusCode", label: "Status", width: 80, minWidth: 65 },
+    { field: "contentLength", label: "Size", width: 90, minWidth: 65 },
+    { field: "contentType", label: "Type", width: 130, minWidth: 80 },
+    { field: "location", label: "Redirect target", width: 200, minWidth: 100 },
+    { field: "url", label: "URL", width: 420, minWidth: 160 },
   ];
 
-  // Resize state
   private resizing: { colIndex: number; startX: number; startWidth: number } | null = null;
 
   constructor(onSelect: (id: string) => void) {
     this.container = document.createElement("div");
     this.container.className = "anomaly-table-container";
-    this.container.style.width = "100%";
-    
+    this.container.style.cssText =
+      "width: 100%; display: flex; flex-direction: column; overflow: hidden; position: relative;";
+
+    this.headerWrap = document.createElement("div");
+    this.headerWrap.className = "anomaly-table-header-wrap";
+    this.headerWrap.style.cssText =
+      "width: 100%; overflow: hidden; flex: 0 0 auto;";
+
     this.scrollContainer = document.createElement("div");
-    this.scrollContainer.style.flex = "1";
-    this.scrollContainer.style.overflow = "auto";
-    this.scrollContainer.style.position = "relative";
-    this.scrollContainer.style.width = "100%";
-    
+    this.scrollContainer.className = "anomaly-table-scroll";
+    this.scrollContainer.style.cssText =
+      "width: 100%; flex: 1 1 auto; overflow: auto; position: relative;";
+
     this.tableWrapper = document.createElement("div");
-    this.tableWrapper.style.position = "relative";
-    this.tableWrapper.style.width = "100%";
-    this.tableWrapper.style.minWidth = "100%";
-    
+    this.tableWrapper.style.cssText =
+      "position: relative; width: 100%; min-width: 100%;";
+
     this.scrollContainer.appendChild(this.tableWrapper);
+    this.container.appendChild(this.headerWrap);
     this.container.appendChild(this.scrollContainer);
-    
+
     this.onSelect = onSelect;
-    
-    // Global mouse handlers for resizing
+
     document.addEventListener("mousemove", this.handleMouseMove.bind(this));
     document.addEventListener("mouseup", this.handleMouseUp.bind(this));
+    this.render();
   }
 
   public getElement(): HTMLElement {
     return this.container;
   }
 
-  public update(results: RankedResult[]) {
-    this.results = [...results];
-    this.originalResults = [...results];
+  public update(results: RankedResult[]): void {
+    this.originalResults = results;
     this.sort();
     this.render();
+  }
+
+  public setEmptyMessage(message: string): void {
+    this.emptyMessage = message;
+    if (this.results.length === 0) this.renderEmpty();
   }
 
   public getSelectedIds(): string[] {
     return Array.from(this.selectedIds);
   }
 
-  public selectAll() {
-    this.selectedIds = new Set(this.results.map(r => r.id as unknown as string));
+  public selectAll(): void {
+    this.selectedIds = new Set(this.results.map((result) => String(result.id)));
     this.updateVisibleRows();
   }
 
-  public deselectAll() {
+  public deselectAll(): void {
     this.selectedIds.clear();
     this.updateVisibleRows();
   }
 
-  private sort() {
-    if (this.sortDirection === "none" || !this.sortField) {
-      this.results = [...this.originalResults];
-      return;
-    }
+  private sort(): void {
+    this.results = [...this.originalResults];
+    if (this.sortDirection === "none" || !this.sortField) return;
 
     const field = this.sortField;
-    const dir = this.sortDirection === "asc" ? 1 : -1;
-    
-    this.results.sort((a, b) => {
-      const v1 = a[field];
-      const v2 = b[field];
-      if (v1 === undefined || v2 === undefined) return 0;
-      
-      if (typeof v1 === "string" && typeof v2 === "string") {
-        return dir * v1.localeCompare(v2);
+    const direction = this.sortDirection === "asc" ? 1 : -1;
+    this.results.sort((left, right) => {
+      const leftValue = left[field];
+      const rightValue = right[field];
+      if (leftValue === undefined || rightValue === undefined) return 0;
+      if (
+        typeof leftValue === "string" &&
+        typeof rightValue === "string"
+      ) {
+        return direction * leftValue.localeCompare(rightValue);
       }
-
-      if (v1 < v2) return -dir;
-      if (v1 > v2) return dir;
+      if (leftValue < rightValue) return -direction;
+      if (leftValue > rightValue) return direction;
       return 0;
     });
   }
 
-  private setSort(field: keyof RankedResult) {
+  private setSort(field: keyof RankedResult): void {
     if (this.sortField === field) {
       if (this.sortDirection === "asc") {
         this.sortDirection = "desc";
@@ -135,7 +143,6 @@ export class ResultsTable {
     }
     this.sort();
     this.scrollContainer.scrollTop = 0;
-    this.updateVisibleRows();
   }
 
   private handleMouseMove(e: MouseEvent) {
@@ -177,8 +184,7 @@ export class ResultsTable {
   }
 
   private updateColumnWidths() {
-    // Update header widths
-    const header = this.tableWrapper.querySelector(".caido-table-header");
+    const header = this.headerWrap.querySelector(".caido-table-header");
     if (header) {
       this.columns.forEach((col, i) => {
         const headerCol = header.children[i] as HTMLElement;
@@ -188,8 +194,7 @@ export class ResultsTable {
         }
       });
     }
-    
-    // Update row widths
+    this.syncScrollbarGutter();
     if (this.tbody) {
       this.tbody.querySelectorAll(".caido-table-row").forEach(row => {
         this.columns.forEach((col, i) => {
@@ -213,46 +218,75 @@ export class ResultsTable {
 
     const totalHeight = this.results.length * ROW_HEIGHT;
     
-    // Build header HTML
     const headerCols = this.columns.map((col, i) => {
-      const widthStyle = `width: ${this.getColumnWidthPercent(i)}; min-width: ${col.minWidth}px; flex-shrink: 0;`;
-      const resizeHandle = `<div class="resize-handle" data-col="${i}" style="position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 1;"></div>`;
-      return `<div data-field="${col.field}" style="${widthStyle} padding: 12px; font-weight: 600; cursor: pointer; position: relative; box-sizing: border-box;">${col.label} ${this.getSortIcon(col.field)}${resizeHandle}</div>`;
+      const isLast = i === this.columns.length - 1;
+      const widthStyle = `width: ${this.getColumnWidthPercent(i)}; min-width: ${col.minWidth}px; flex-shrink: 0;${isLast ? "" : " border-right: 1px solid var(--ar-rule);"}`;
+      const ariaSort =
+        this.sortField !== col.field || this.sortDirection === "none"
+          ? "none"
+          : this.sortDirection === "asc" ? "ascending" : "descending";
+      const resizeHandle = isLast
+        ? ""
+        : `<div
+            class="resize-handle"
+            data-col="${i}"
+            role="separator"
+            aria-label="Resize ${col.label} column"
+            aria-orientation="vertical"
+          ></div>`;
+      return `
+        <div role="columnheader" aria-sort="${ariaSort}" style="${widthStyle} position: relative;">
+          <button type="button" data-field="${col.field}" class="anomaly-column-sort">
+            ${col.label} ${this.getSortIcon(col.field)}
+          </button>
+          ${resizeHandle}
+        </div>
+      `;
     }).join("");
-    
-    this.tableWrapper.innerHTML = `
-      <div class="caido-table-header" style="display: flex; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--background, #1e1e1e); position: sticky; top: 0; z-index: 10;">
+
+    this.headerWrap.innerHTML = `
+      <div class="caido-table-header" role="row">
         ${headerCols}
       </div>
-      <div class="virtual-scroll-body" style="position: relative; height: ${totalHeight}px; width: 100%;">
-      </div>
+    `;
+
+    this.tableWrapper.setAttribute("role", "grid");
+    this.tableWrapper.setAttribute("aria-label", "Ranked response signals");
+    this.tableWrapper.setAttribute("aria-rowcount", String(this.results.length));
+    this.tableWrapper.innerHTML = `
+      <div class="virtual-scroll-body" role="rowgroup" style="position: relative; height: ${totalHeight}px; width: 100%;"></div>
     `;
 
     this.tbody = this.tableWrapper.querySelector(".virtual-scroll-body");
 
-    // Attach sort handlers (but not on resize handles)
-    this.tableWrapper.querySelectorAll("[data-field]").forEach(th => {
-      th.addEventListener("click", (e) => {
-        if ((e.target as HTMLElement).classList.contains("resize-handle")) return;
-        const field = th.getAttribute("data-field") as keyof RankedResult;
-        this.setSort(field);
-        this.render(); // Re-render to update sort icons
+    this.headerWrap.querySelectorAll<HTMLButtonElement>("[data-field]").forEach(button => {
+      button.addEventListener("click", () => {
+        this.setSort(button.dataset.field as keyof RankedResult);
+        this.render();
       });
     });
 
-    // Attach resize handlers
-    this.tableWrapper.querySelectorAll(".resize-handle").forEach(handle => {
+    this.headerWrap.querySelectorAll(".resize-handle").forEach(handle => {
       handle.addEventListener("mousedown", (e) => {
         const colIndex = parseInt((handle as HTMLElement).getAttribute("data-col") || "0");
         this.startResize(colIndex, e as MouseEvent);
       });
     });
 
-    this.scrollHandler = () => this.updateVisibleRows();
+    this.scrollHandler = () => {
+      this.headerWrap.scrollLeft = this.scrollContainer.scrollLeft;
+      this.updateVisibleRows();
+    };
     this.scrollContainer.addEventListener("scroll", this.scrollHandler);
+    this.syncScrollbarGutter();
     this.updateVisibleRows();
   }
 
+  private syncScrollbarGutter(): void {
+    const scrollbarWidth =
+      this.scrollContainer.offsetWidth - this.scrollContainer.clientWidth;
+    this.headerWrap.style.paddingRight = `${Math.max(0, scrollbarWidth)}px`;
+  }
   private getColumnWidthPercent(colIndex: number): string {
     const totalWeight = this.columns.reduce((sum, col) => sum + col.width, 0);
     const percent = (this.columns[colIndex].width / totalWeight) * 100;
@@ -279,78 +313,100 @@ export class ResultsTable {
     this.visibleStart = start;
     this.visibleEnd = end;
 
+    if (this.results.length === 0) {
+      this.renderEmpty();
+      return;
+    }
+
     const visibleResults = this.results.slice(start, end);
 
     this.tbody.replaceChildren();
     for (let i = 0; i < visibleResults.length; i++) {
-      const r = visibleResults[i];
+      const result = visibleResults[i];
       const actualIndex = start + i;
       const topOffset = actualIndex * ROW_HEIGHT;
-      const rowBgColor = getRowBackgroundColor(r.statusCode, r.contentType);
-      const indicatorColor = getRowColor(r.statusCode, r.contentType);
-      const idStr = String(r.id);
+      const id = String(result.id);
 
       const row = document.createElement("div");
-      row.className = `caido-table-row${this.selectedIds.has(idStr) ? " selected" : ""}`;
-      row.setAttribute("data-id", idStr);
-      row.setAttribute("data-index", String(actualIndex));
-      row.style.cssText = `position: absolute; top: ${topOffset}px; width: 100%; height: ${ROW_HEIGHT}px; display: flex; align-items: center; border-bottom: 1px solid var(--border-color); cursor: pointer; box-sizing: border-box; background-color: ${rowBgColor};`;
+      row.className = `caido-table-row${this.selectedIds.has(id) ? " selected" : ""}`;
+      row.dataset.id = id;
+      row.dataset.index = String(actualIndex);
+      row.style.cssText = `position: absolute; top: ${topOffset}px; width: 100%; height: ${ROW_HEIGHT}px; display: flex; align-items: center; border-bottom: 1px solid var(--ar-rule); cursor: pointer;`;
+      row.setAttribute("role", "row");
+      row.setAttribute("aria-rowindex", String(actualIndex + 1));
+      row.setAttribute("aria-selected", String(this.selectedIds.has(id)));
+      row.tabIndex = 0;
 
-      this.columns.forEach((col, colIdx) => {
+
+      this.columns.forEach((column, columnIndex) => {
         const cell = document.createElement("div");
-        const widthStyle = `width: ${this.getColumnWidthPercent(colIdx)}; min-width: ${col.minWidth}px; flex-shrink: 0;`;
-        const extraStyle = colIdx === 0 ? `border-left: 4px solid ${indicatorColor};` : "";
-        if (col.field === "rank" && r.rank > 70) {
+        cell.setAttribute("role", "gridcell");
+        const widthStyle = `width: ${this.getColumnWidthPercent(columnIndex)}; min-width: ${column.minWidth}px; flex-shrink: 0;`;
+        if (column.field === "rank" && result.rank > 70) {
           cell.className = "rank-high";
         }
-        cell.style.cssText = `${widthStyle} ${extraStyle} padding: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box;`;
-        cell.textContent = this.getCellValue(r, col.field);
+        cell.style.cssText = `${widthStyle} padding: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
+        if (column.field === "statusCode") {
+          const dot = document.createElement("span");
+          dot.className = "anomaly-status-dot";
+          dot.style.background = getStatusColor(result.statusCode);
+          dot.setAttribute("aria-hidden", "true");
+          cell.append(dot, document.createTextNode(String(result.statusCode)));
+        } else {
+          cell.textContent = this.getCellValue(result, column.field);
+        }
         row.appendChild(cell);
       });
 
-      row.addEventListener("click", ((event: Event) => {
-        const mouseEvent = event as MouseEvent;
-        const id = row.getAttribute("data-id");
-        const indexStr = row.getAttribute("data-index");
-        if (!id || !indexStr) return;
-
-        const currentIndex = parseInt(indexStr);
-
-        if (mouseEvent.shiftKey && this.lastClickedId) {
-          const lastIndex = this.results.findIndex((res) => res.id === this.lastClickedId);
-          const rangeStart = Math.min(currentIndex, lastIndex);
-          const rangeEnd = Math.max(currentIndex, lastIndex);
-
-          if (!mouseEvent.ctrlKey && !mouseEvent.metaKey) {
-            this.selectedIds.clear();
+      const selectRow = (mouseEvent?: MouseEvent) => {
+        const currentIndex = Number(row.dataset.index);
+        const additive = Boolean(mouseEvent?.ctrlKey || mouseEvent?.metaKey);
+        if (mouseEvent?.shiftKey && this.lastClickedId) {
+          const lastIndex = this.results.findIndex(
+            (item) => String(item.id) === this.lastClickedId,
+          );
+          if (!additive) this.selectedIds.clear();
+          for (
+            let index = Math.min(currentIndex, lastIndex);
+            index <= Math.max(currentIndex, lastIndex);
+            index++
+          ) {
+            this.selectedIds.add(String(this.results[index].id));
           }
-
-          for (let idx = rangeStart; idx <= rangeEnd; idx++) {
-            this.selectedIds.add(this.results[idx].id as unknown as string);
-          }
-        } else if (mouseEvent.ctrlKey || mouseEvent.metaKey) {
-          if (this.selectedIds.has(id)) {
-            this.selectedIds.delete(id);
-          } else {
-            this.selectedIds.add(id);
-          }
+        } else if (additive) {
+          if (this.selectedIds.has(id)) this.selectedIds.delete(id);
+          else this.selectedIds.add(id);
         } else {
           this.selectedIds.clear();
           this.selectedIds.add(id);
         }
-
         this.lastClickedId = id;
         this.onSelect(id);
         this.updateVisibleRows();
-      }) as EventListener);
+      };
 
-      this.tbody!.appendChild(row);
+      row.addEventListener("click", (event) => selectRow(event));
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        selectRow();
+      });
+      this.tbody.appendChild(row);
     }
+  }
+
+  public renderEmpty(): void {
+    if (!this.tbody) return;
+    const row = document.createElement("div");
+    row.className = "anomaly-table-empty-notice";
+    row.textContent = this.emptyMessage;
+    this.tbody.replaceChildren(row);
   }
 
   private getCellValue(r: RankedResult, field: keyof RankedResult): string {
     switch (field) {
       case "rank": return String(r.rank);
+      case "occurrences": return String(r.occurrences);
       case "rawRank": return String(r.rawRank);
       case "method": return r.method;
       case "statusCode": return String(r.statusCode);

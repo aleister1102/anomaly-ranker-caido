@@ -14,10 +14,11 @@ function escapeCsvField(value: string | number): string {
 }
 
 export const toCsv = (results: RankedResult[]): string => {
-  const headers = ["Rank", "Raw", "Method", "Status", "Length", "Type", "URL"];
+  const headers = ["Rank", "Count", "Raw", "Method", "Status", "Length", "Type", "URL"];
   const rows = results.map((r) =>
     [
       r.rank,
+      r.occurrences,
       r.rawRank,
       r.method,
       r.statusCode,

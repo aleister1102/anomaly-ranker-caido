@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-09-03
+
+### Added
+- Resumable full-history scans with live checkpoints and instant pause/resume.
+- Autocomplete suggestions and syntax highlighting for HTTPQL queries in the history filter.
+- Grouping of identical responses into count-annotated rows while preserving frequency-scoring population.
+- Scope-aware scanning defaulting to in-scope traffic and excluding media files.
+- Live requests-per-second processing speed indicator.
+- Determinate progress bar tracking reviewed against matching requests.
+
+### Changed
+- Refreshed user interface using Caido's native design tokens and unified toolbar controls.
+- Full-history scans now reuse records from Caido's query pages instead of re-fetching each record.
+- Memory and throughput optimizations: single-pass byte extraction, zero-copy response body slicing, and skipping HTML tokenization on non-HTML responses.
+- Status code mix now displays semantic colors (1xx blue, 2xx green, 3xx yellow, 4xx orange, 5xx red).
+
+### Fixed
+- Fixed scan cancellation race condition and executor lockups in QuickJS.
+- Fixed malformed non-HTTP responses (e.g. raw MySQL handshake packets with status code 0) invalidating anomaly ranks.
+- Fixed table scrollbar overlapping the header row.
+- Fixed request and response viewer resizing and clipping.
+
 ## v1.5
 
 ### Fixed

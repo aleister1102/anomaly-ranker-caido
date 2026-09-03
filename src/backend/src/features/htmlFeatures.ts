@@ -176,6 +176,9 @@ function decodeUtf8(bytes: Uint8Array): string {
 }
 
 export function extractHtmlFeatures(bodyBytes: Uint8Array): HtmlFeatures {
+  if (bodyBytes.length === 0 || bodyBytes.indexOf(0x3c) === -1) {
+    return { hasMarkup: false, visibleText: 0, visibleWordCount: 0, tagNames: 0 };
+  }
   const html = decodeUtf8(bodyBytes);
   const nodes = tokenizeHtml(html);
   const hasMarkup =

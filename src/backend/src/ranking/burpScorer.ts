@@ -6,9 +6,11 @@ import {
   type ResponseFeatureSet,
 } from "./types.js";
 
-function buildFrequencyTables(
+export type FrequencyTables = Map<FeatureName, Map<number, number>>;
+
+export function buildFrequencyTables(
   featureSets: ResponseFeatureSet[],
-): Map<FeatureName, Map<number, number>> {
+): FrequencyTables {
   const tables = new Map<FeatureName, Map<number, number>>();
   for (const name of FEATURE_NAMES) {
     tables.set(name, new Map());
@@ -28,13 +30,11 @@ function buildFrequencyTables(
   return tables;
 }
 
-function countDistinct(freq: Map<number, number>): number {
-  return freq.size;
-}
 
-function scoreOne(
+export function scoreFeatureSet(
   set: ResponseFeatureSet,
-  tables: Map<FeatureName, Map<number, number>>,
+  tables: FrequencyTables,
+  includeContributions = true,
 ): RankingResult {
   if (!set.hasResponse) {
     return { requestId: set.requestId, rawRank: -1, contributions: [] };
@@ -45,7 +45,7 @@ function scoreOne(
 
   for (const name of FEATURE_NAMES) {
     const freqTable = tables.get(name)!;
-    const k = countDistinct(freqTable);
+    const k = freqTable.size;
     if (k <= 1) {
       continue;
     }
@@ -60,14 +60,16 @@ function scoreOne(
     const contribution = weight / frequency;
     sum += contribution;
 
-    contributions.push({
-      feature: name,
-      value,
-      frequency,
-      distinctValues: k,
-      weight,
-      contribution,
-    });
+    if (includeContributions) {
+      contributions.push({
+        feature: name,
+        value,
+        frequency,
+        distinctValues: k,
+        weight,
+        contribution,
+      });
+    }
   }
 
   return {
@@ -81,5 +83,5 @@ export function scoreFeatureSets(
   featureSets: ResponseFeatureSet[],
 ): RankingResult[] {
   const tables = buildFrequencyTables(featureSets);
-  return featureSets.map((set) => scoreOne(set, tables));
+  return featureSets.map((set) => scoreFeatureSet(set, tables));
 }
